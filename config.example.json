@@ -1,0 +1,37 @@
+{
+  "port": 8104,
+  "host": "127.0.0.1",
+  "data_dir": "data",
+  "llm": {
+    "provider": "none",
+    "base_url": "http://localhost:11434/v1",
+    "model": "gemma3:4b",
+    "api_key_env": "LLM_API_KEY",
+    "temperature": 0.1,
+    "timeout": 120
+  },
+  "energy": {
+    "cdd_base": 18.0,
+    "hdd_base": 18.0,
+    "closure_expected_ratio": 0.35,
+    "contract_margin": 0.2,
+    "co2_per_kwh": 0.4594,
+    "tariff": {
+      "summer": [
+        105,
+        160,
+        240
+      ],
+      "spring": [
+        100,
+        125,
+        155
+      ],
+      "winter": [
+        110,
+        155,
+        205
+      ]
+    }
+  }
+}

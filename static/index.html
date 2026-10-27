@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>에너지 절감 비서 - 공공건물 에너지 점검</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/core/common.css">
+<style>
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  @media (max-width: 900px) { .kpis { grid-template-columns: 1fr 1fr; } }
+  .stat .lbl { font-size: 13px; color: var(--muted); }
+  .stat.hl { background: var(--brand-soft); }
+  .stat.hl b { color: var(--brand); }
+  .facs { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .fac { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 16px 18px; background: var(--panel); cursor: pointer; transition: border-color .2s, transform .2s; }
+  .fac:hover { border-color: var(--brand); transform: translateY(-2px); }
+  .fac h4 { margin: 0 0 2px; font-size: 16px; }
+  .fac .use { font-size: 12px; color: var(--muted); }
+  .fac .num { font-size: 22px; font-weight: 700; letter-spacing: -.02em; margin-top: 8px; }
+  .fac svg { width: 100%; height: 38px; margin-top: 6px; }
+  .delta.up { color: var(--bad); } .delta.down { color: var(--ok); }
+  .chart { width: 100%; height: auto; display: block; }
+  .chart text { font-size: 11px; fill: var(--muted); }
+  .chart .bar { fill: #c7d7ee; } .chart .bar.recent { fill: #6e9be0; } .chart .bar.hit { fill: #ff3b30; } .chart .bar.closed { fill: #d1d1d6; }
+  .chart .exp { fill: none; stroke: #1d1d1f; stroke-width: 2; stroke-dasharray: 5 4; }
+  .chart .act { stroke: var(--ok); stroke-width: 2; }
+  .chart .act-t { fill: var(--ok); font-weight: 600; }
+  .chart .base-bg { fill: #f2f2f4; }
+  .amount { font-size: 22px; font-weight: 700; color: var(--ink); letter-spacing: -.02em; }
+  .fbox { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px; margin-bottom: 14px; background: var(--panel); }
+  .fbox.bad { border-left: 6px solid #ff3b30; } .fbox.warn { border-left: 6px solid #ff9f0a; } .fbox.gray { border-left: 6px solid #aeaeb2; }
+  .fbox h3 { margin: 0 0 6px; font-size: 17px; }
+  .fbox .ev { font-size: 13.5px; margin: 3px 0; }
+  .ans { white-space: pre-wrap; font-size: 15.5px; line-height: 1.7; }
+  .flow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .flow b { color: var(--ink); background: #fff; border: 1px solid var(--line); padding: 4px 10px; border-radius: 99px; font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="gov-strip"><b>2026 공공 AI 대전환 챌린지 출품작</b><span class="sep">|</span><span>시연용 모의자료 사용</span></div>
+<div class="masthead"><span class="ms-mark" aria-hidden="true">AI</span><b>공공기관 업무지원 AI 서비스</b><span class="ms-sub">에너지 절감 비서</span></div>
+<header class="top">
+  <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>
+  <div>
+    <div class="eyebrow">공공건물 에너지 점검 · 탄소중립</div>
+    <h1>에너지 절감 비서</h1>
+    <div class="sub">고지서를 넣으면, 새는 에너지를 찾아 줍니다.</div>
+    <ul class="highlights"><li><b>기온 보정 진단</b><span>날씨 탓인지 설비 탓인지 가려냅니다</span></li><li><b>요금 점검</b><span>계약전력·역률·고지 금액을 다시 계산합니다</span></li><li><b>조치와 효과</b><span>점검 요청부터 절감 효과까지 이어 봅니다</span></li></ul>
+  </div>
+  <div class="spacer"></div>
+  <span id="llm-badge" class="llm-badge">모델: …</span>
+</header>
+<nav class="tabs">
+  <button data-tab="home">한눈에 보기</button>
+  <button data-tab="find">점검 결과</button>
+  <button data-tab="fac">시설별 분석</button>
+  <button data-tab="act">절감 조치·효과</button>
+  <button data-tab="ask">물어보기</button>
+  <button data-tab="report">보고서</button>
+  <button data-tab="data">자료 넣기</button>
+  <button data-tab="log">작업 기록</button>
+</nav>
+<main>
+  <section class="tab" id="tab-home"></section>
+  <section class="tab" id="tab-find" hidden></section>
+  <section class="tab" id="tab-fac" hidden>
+    <div class="panel">
+      <div class="row"><h2 style="flex:1;margin:0">시설별 분석</h2>
+        <select id="fac-sel"></select>
+        <select id="kind-sel"><option value="elec">전기(kWh)</option><option value="gas">도시가스(㎥)</option></select></div>
+      <p class="small muted">막대는 실제 사용량, 점선은 기준 기간 자료로 만든 '기온만 감안한 예상 사용량'입니다. 빨간 막대는 지침 기준을 넘은 달, 회색은 휴관한 달, 초록 선은 절감 조치 시행일입니다.</p>
+      <div id="fac-chart"></div>
+    </div>
+    <div id="fac-detail"></div>
+  </section>
+  <section class="tab" id="tab-act" hidden></section>
+  <section class="tab" id="tab-ask" hidden>
+    <div class="panel">
+      <div class="row">
+        <input id="q" class="wide" style="flex:1;font-size:15px;padding:10px" placeholder='예: "체육센터 8월 전기 왜 늘었어?"'>
+        <button class="primary" id="ask-btn">물어보기</button>
+      </div>
+      <div class="row small" id="ask-ex" style="margin-top:8px"></div>
+      <p class="small muted">계산된 사실에서만 답합니다. 모델을 연결해도 답에 사실에 없는 숫자가 있으면 그 답은 버립니다.</p>
+    </div>
+    <div id="ask-out"></div>
+  </section>
+  <section class="tab" id="tab-report" hidden></section>
+  <section class="tab" id="tab-data" hidden></section>
+  <section class="tab" id="tab-log" hidden></section>
+</main>
+<script src="/core/common.js"></script>
+<script src="/app.js"></script>
+<footer class="foot">공공기관 업무지원 AI 서비스 · 화면에 나오는 기관·시설·수치는 모두 시연용 모의자료입니다.</footer>
+</body>
+</html>
