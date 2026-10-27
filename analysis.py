@@ -25,6 +25,7 @@ RULES = [
     ("bill_diff_pct", r"요금 확인|고지서", r"(\d+)\s*%\s*이상", 1, "요금 재계산 차이 기준(%)"),
     ("effect_months", r"효과", r"(\d+)\s*개월\s*이상", 3, "조치 효과 측정 최소 기간(개월)"),
     ("cool_setpoint", r"냉방", r"(\d+)\s*℃\s*이상", 26, "냉방 설정온도(℃)"),
+    ("target_pct", r"감축 목표", r"(\d+)\s*%\s*이상\s*줄", None, "연간 전기 감축 목표(기온 보정, %)"),
 ]
 TOPIC = {  # 결과 종류 → 관련 지침 조문을 찾는 낱말
     "excess": r"이상 사용", "gas_excess": r"연소|보일러", "contract": r"계약전력", "pf": r"역률",
@@ -417,6 +418,55 @@ class Analysis:
                         "note": "휴관 달은 빼고, 시행 전 기준선(기온 보정)과 비교"})
         return out
 
+    # -------------------------------------------------- 감축 목표 진척
+    def target(self):
+        """지침의 감축 목표 대비 최근 12개월 기온 보정 사용량 변화. 휴관한 달은 뺀다."""
+        t = self.g["target_pct"]
+        if t is None or not self.recent:
+            return None
+        facs, A, E = [], 0.0, 0.0
+        for fac in self.ds.facilities:
+            rows = [r for r in self.series.get((fac, "elec"), []) if r["recent"] and r["expected"] and r["closed"] == 0]
+            if not rows:
+                continue
+            a, e = sum(r["actual"] for r in rows), sum(r["expected"] for r in rows)
+            A, E = A + a, E + e
+            facs.append({"name": fac, "actual": round(a), "expected": round(e), "change_pct": round((a - e) / e * 100, 1), "months": len(rows)})
+        if not E:
+            return None
+        # 점검 결과(기온 보정 초과 사용)를 조치했다면: 초과분이 없었다고 보고 다시 계산
+        fix = sum(f["excess"] for f in self.findings if f["type"] == "excess")
+        goal = E * (1 - t / 100)
+        return {"target_pct": t, "basis": self.g.basis["target_pct"]["basis"], "actual": round(A), "expected": round(E),
+                "change_pct": round((A - E) / E * 100, 1), "goal_kwh": round(goal), "gap_kwh": round(max(0, A - goal)),
+                "fix_kwh": round(fix), "after_fix_pct": round((A - fix - E) / E * 100, 1),
+                "facilities": sorted(facs, key=lambda x: -x["change_pct"]),
+                "note": "최근 12개월 중 휴관한 달을 뺀 달의 실제 사용량을 같은 달 기온만 감안한 예상치(기준선)와 비교"}
+
+    # -------------------------------------------------- 다음 달 관리 목표
+    def outlook(self):
+        """다음 달 시설별 예상 사용량. 기온은 작년 같은 달 값을 쓴다(예보가 아님)."""
+        if not self.latest:
+            return None
+        nm = ym_add(self.latest, 1)
+        ref = ym_add(nm, -12)
+        dd = self.dd(ref)
+        if dd is None:
+            return {"ym": nm, "rows": [], "note": f"{ref} 기온 자료가 없어 계산하지 못했습니다"}
+        th = self.g["excess_pct"]
+        rows = []
+        for fac in self.ds.facilities:
+            m = self.models.get((fac, "elec"))
+            if not m:
+                continue
+            exp = predict(m, dd)
+            units = [r["unit"] for r in self.series.get((fac, "elec"), []) if r["recent"] and r["unit"]]
+            unit = units[-1] if units else None
+            rows.append({"name": fac, "expected": round(exp), "limit": round(exp * (1 + th / 100)),
+                         "cost": round(exp * unit) if unit else None, "unit": round(unit, 1) if unit else None})
+        return {"ym": nm, "ref": ref, "temp": self.ds.weather[ref]["t"], "excess_pct": th, "rows": rows,
+                "note": f"기온은 작년 같은 달({ref}) 월평균기온을 썼습니다(예보 아님). 점검선은 지침의 초과 기준 {th:g}%. 요금은 최근 고지서의 kWh당 전력량요금 단가로 계산한 추정치이며 기본요금은 빠져 있습니다."}
+
     # -------------------------------------------------- 요약
     def overview(self):
         facs = []
@@ -456,6 +506,7 @@ class Analysis:
                        "excess_co2_t": round(sum(f.get("excess") or 0 for f in self.findings if f.get("unit") == "kWh") * self.cfg["energy"]["co2_per_kwh"] / 1000, 1)},
             "rules": list(self.g.basis.values()),
             "co2_factor": self.cfg["energy"]["co2_per_kwh"],
+            "target": self.target(), "outlook": self.outlook(),
         }
 
 

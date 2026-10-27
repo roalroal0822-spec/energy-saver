@@ -69,6 +69,14 @@ def checks(c):
     for fmt in ("hwpx", "docx", "md"):
         d = c.call("POST", f"/api/report?fmt={fmt}", {}, raw=True)
         yield f"보고서 내보내기({fmt})", len(d) > 500
+    tg = s["overview"]["target"]
+    yield "감축 목표를 지침 조문에서 읽고 진척 계산", tg and tg["target_pct"] == 5 and tg["basis"]["label"] == "제14조" and tg["gap_kwh"] > 0
+    ol = s["overview"]["outlook"]
+    yield "다음 달 시설별 관리 목표(작년 같은 달 기온)", ol["rows"] and all(r["limit"] > r["expected"] for r in ol["rows"])
+    q = c.call("POST", "/api/ask", {"q": "감축 목표 달성할 수 있어?"})
+    yield "목표 질문 답변", "목표" in q["answer"] and "제14조" not in q["answer"] and q["sources"]
+    d = c.call("POST", "/api/export-xlsx", {}, raw=True)
+    yield "엑셀 내보내기(시트 3개)", d[:2] == b"PK" and _sheets(d) == ["점검 결과", "시설별 월 내역", "조치 효과"]
     fid = s["findings"][0]["id"]
     d = c.call("POST", f"/api/findings/{fid}/request?fmt=hwpx", {}, raw=True)
     yield "점검 요청서", d[:2] == b"PK"
@@ -87,6 +95,12 @@ def checks(c):
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 11
+
+
+def _sheets(data):
+    import io
+    from openpyxl import load_workbook
+    return load_workbook(io.BytesIO(data)).sheetnames
 
 
 def main():

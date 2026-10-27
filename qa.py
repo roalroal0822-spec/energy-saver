@@ -106,6 +106,23 @@ def facts_for(an, q):
                 return facts, srcs, "\n".join(f"{f['title']}: {f['summary']} 할 일: " + "; ".join(f["steps"]) for f in hits)
             return facts, srcs, "해당하는 점검 결과가 없습니다."
 
+    if re.search(r"목표|달성", q):
+        tg = ov.get("target")
+        if not tg:
+            return facts, srcs, "넣은 지침에서 감축 목표 조문을 찾지 못했습니다."
+        facts += [f"지침 감축 목표: 기온 보정 전기 사용량 {tg['target_pct']:g}% 감축",
+                  f"최근 12개월(휴관 달 제외) 실제 {_fmt(tg['actual'], 'kWh')}, 기온만 감안한 기준선 {_fmt(tg['expected'], 'kWh')}, 변화 {_p(tg['change_pct'])}",
+                  f"목표까지 더 줄여야 할 양 {_fmt(tg['gap_kwh'], 'kWh')}",
+                  f"점검 결과의 초과 사용 {_fmt(tg['fix_kwh'], 'kWh')}를 없앴다면 변화 {_p(tg['after_fix_pct'])}"]
+        facts += [f"{x['name']} 기온 보정 변화 {_p(x['change_pct'])}" for x in tg["facilities"]]
+        if tg["basis"]:
+            srcs.append({"file": tg["basis"]["file"], "loc": tg["basis"]["loc"], "quote": tg["basis"]["text"][:160]})
+        worst = tg["facilities"][0]
+        ans = (f"지침 목표는 기온을 감안한 전기 사용량 {tg['target_pct']:g}% 감축인데, 최근 12개월(휴관 달 제외)은 기준선 대비 {_p(tg['change_pct'])}로 "
+               f"{'목표를 달성했습니다' if tg['gap_kwh'] == 0 else '아직 목표에 못 미칩니다. ' + _fmt(tg['gap_kwh'], 'kWh') + '를 더 줄여야 합니다'}. "
+               f"점검 결과의 초과 사용을 조치했다면 {_p(tg['after_fix_pct'])}였습니다. 기준선보다 가장 많이 늘어난 곳은 {worst['name']}({_p(worst['change_pct'])})입니다.")
+        return facts, srcs, ans
+
     if re.search(r"절감|아낄|줄일|얼마|효과", q):
         t = ov["totals"]
         facts.append(f"점검 결과 {t['findings']}건, 찾은 금액 합계(추정) {_fmt(t['amount'], '원')}")

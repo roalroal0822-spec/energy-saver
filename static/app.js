@@ -48,6 +48,9 @@ function renderHome() {
       el("div", { class: "stat hl" }, el("b", {}, num(t.amount / 1e4) + "만"), el("span", { class: "lbl" }, "찾은 금액(원, 추정)"))),
     el("div", { class: "flow" }, "흐름:", el("b", {}, "고지서·내역 넣기"), "→", el("b", {}, "기온 보정 진단"), "→", el("b", {}, "점검 요청서"), "→", el("b", {}, "조치 등록"), "→", el("b", {}, "효과 측정·보고"))));
 
+  if (o.target) box.append(targetPanel(o.target));
+  if (o.outlook && o.outlook.rows.length) box.append(outlookPanel(o.outlook));
+
   const sum = el("div", { class: "ans", id: "summary-text" }, "");
   const btn = el("button", { class: "primary", onclick: async () => {
     busy(btn, true, "총평 쓰는 중");
@@ -76,6 +79,43 @@ function renderHome() {
       f.amount ? el("div", { class: "fix" }, el("b", {}, f.amount_label + " "), won(f.amount)) : null)));
   box.append(el("div", { class: "panel" }, el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "먼저 볼 것"),
     el("button", { onclick: () => GO("find") }, "점검 결과 전체")), top));
+}
+
+// 감축 목표: 시설별 기온 보정 변화(가로 막대, 0 기준 좌우)와 목표선
+function targetPanel(t) {
+  const W = 1100, rowH = 40, L = 140, R = 90, H = t.facilities.length * rowH + 30;
+  const span = Math.max(t.target_pct + 2, ...t.facilities.map(x => Math.abs(x.change_pct))) * 1.1;
+  const cx = L + (W - L - R) / 2, sx = v => cx + (v / span) * (W - L - R) / 2;
+  let svg = `<line x1="${cx}" x2="${cx}" y1="4" y2="${H - 20}" stroke="#8e8e93"/>`;
+  svg += `<line x1="${sx(-t.target_pct)}" x2="${sx(-t.target_pct)}" y1="4" y2="${H - 20}" stroke="#30d158" stroke-width="2" stroke-dasharray="5 4"/>`;
+  svg += `<text x="${sx(-t.target_pct)}" y="${H - 4}" text-anchor="middle" fill="#248a3d">목표 -${t.target_pct}%</text><text x="${cx}" y="${H - 4}" text-anchor="middle">기준선</text>`;
+  t.facilities.forEach((f, i) => {
+    const y = 8 + i * rowH, v = f.change_pct, x0 = Math.min(cx, sx(v)), w = Math.max(2, Math.abs(sx(v) - cx));
+    svg += `<text x="${L - 10}" y="${y + 17}" text-anchor="end" fill="#1d1d1f">${esc(f.name)}</text>`;
+    svg += `<rect x="${x0}" y="${y + 4}" width="${w}" height="18" rx="4" fill="${v > 0 ? "#ff3b30" : v <= -t.target_pct ? "#30d158" : "#6e9be0"}"/>`;
+    svg += `<text x="${v > 0 ? sx(v) + 6 : x0 - 6}" y="${y + 17}" text-anchor="${v > 0 ? "start" : "end"}" fill="#1d1d1f">${pct(v)}</text>`;
+  });
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("class", "chart"); s.innerHTML = svg;
+  const done = t.gap_kwh === 0;
+  return el("div", { class: "panel", id: "target-panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "감축 목표 진척"), basisChip(t.basis)),
+    el("div", { class: "kpis", style: { marginTop: "12px", gridTemplateColumns: "repeat(4,1fr)" } },
+      el("div", { class: "stat" }, el("b", {}, "-" + t.target_pct + "%"), el("span", { class: "lbl" }, "지침 목표(기온 보정)")),
+      el("div", { class: "stat " + (done ? "hl" : "") }, el("b", { style: { color: t.change_pct > 0 ? "var(--bad)" : "" } }, pct(t.change_pct)), el("span", { class: "lbl" }, "최근 12개월 현재")),
+      el("div", { class: "stat" }, el("b", {}, done ? "달성" : num(t.gap_kwh / 1000)), el("span", { class: "lbl" }, done ? "목표 달성" : "목표까지 더 줄일 양(MWh)")),
+      el("div", { class: "stat hl" }, el("b", {}, pct(t.after_fix_pct)), el("span", { class: "lbl" }, "점검 결과를 조치했다면"))),
+    el("div", { style: { marginTop: "12px" } }, s),
+    el("p", { class: "small muted" }, t.note + ". 빨간 막대는 기준선보다 더 쓴 시설, 초록 점선은 목표선입니다. '조치했다면'은 점검 결과의 기온 보정 초과 사용분이 없었다고 보고 다시 계산한 값입니다."));
+}
+
+function outlookPanel(o) {
+  return el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, `${+o.ym.slice(5)}월 시설별 관리 목표`),
+      el("span", { class: "small muted" }, `작년 ${+o.ref.slice(5)}월 기온 ${o.temp}℃ 기준`)),
+    el("table", { class: "t", style: { marginTop: "10px" } }, el("tr", {}, ["시설", "예상 사용량", `점검선(+${o.excess_pct}%)`, "예상 전력량요금"].map(h => el("th", {}, h))),
+      o.rows.map(x => el("tr", {}, el("td", {}, x.name), el("td", {}, num(x.expected, " kWh")), el("td", {}, el("b", {}, num(x.limit, " kWh"))), el("td", {}, won(x.cost))))),
+    el("p", { class: "small muted" }, "시설 담당에게 이번 달 점검선을 미리 알려 두면, 고지서가 오기 전에 계량기로 확인할 수 있습니다. " + o.note));
 }
 
 // ------------------------------------------------------------ 점검 결과
@@ -219,7 +259,7 @@ function renderAct() {
 }
 
 // ------------------------------------------------------------ 물어보기
-const EX = ["체육센터 8월 전기 왜 늘었어?", "얼마나 아낄 수 있어?", "역률 문제 있는 곳?", "면적당 가장 많이 쓰는 시설은?", "주차장 기본요금 줄일 수 있어?", "문화예술회관 2월 왜 이렇게 많이 썼어?"];
+const EX = ["체육센터 8월 전기 왜 늘었어?", "감축 목표 달성할 수 있어?", "얼마나 아낄 수 있어?", "역률 문제 있는 곳?", "면적당 가장 많이 쓰는 시설은?", "주차장 기본요금 줄일 수 있어?", "문화예술회관 2월 왜 이렇게 많이 썼어?"];
 async function ask(q) {
   q = (q || $("#q").value).trim();
   if (!q) return;
@@ -243,6 +283,9 @@ function renderReport() {
   box.append(el("div", { class: "panel" }, el("h2", {}, "에너지 사용 점검 보고서"),
     el("p", {}, "총평, 시설별 현황, 점검 결과(근거 조문·계산식), 절감 조치 이행·효과, 점검 기준을 한 문서로 만듭니다. '한눈에 보기'에서 AI 총평을 쓴 경우 그 총평이 들어갑니다."),
     el("div", { class: "row" }, el("span", { class: "small muted" }, "내려받기:"), exportButtons("/api/report"))));
+  box.append(el("div", { class: "panel" }, el("h3", {}, "엑셀로 받기"),
+    el("p", { class: "small muted" }, "점검 결과(근거 조문·계산식·출처), 시설별 월 내역(실제·기온 보정 예상·차이), 조치 효과를 시트별로 담습니다. 기관 양식에 옮겨 붙이거나 다시 계산할 때 쓰세요."),
+    el("button", { onclick: () => download("/api/export-xlsx", {}) }, "엑셀(XLSX) 내려받기")));
   box.append(el("div", { class: "panel" }, el("h3", {}, "점검 요청서"),
     el("p", { class: "small muted" }, "점검 결과마다 담당 부서에 보낼 요청서(근거 자료·확인할 일·관련 기준)를 만들 수 있습니다."),
     el("table", { class: "t" }, el("tr", {}, ["번호", "점검 결과", "수신", ""].map(h => el("th", {}, h))),
@@ -291,7 +334,7 @@ function renderData() {
   box.append(el("div", { class: "panel" }, el("h3", {}, "점검 기준"),
     el("p", { class: "small muted" }, "기준값은 넣은 지침의 조문에서 읽습니다. 지침을 고쳐 다시 넣으면 기준이 바뀝니다. 지침에 없는 값은 기본값을 씁니다."),
     el("table", { class: "t" }, el("tr", {}, ["기준", "값", "근거"].map(h => el("th", {}, h))),
-      S.overview.rules.map(r => el("tr", {}, el("td", {}, r.label), el("td", {}, r.value), el("td", {}, r.basis ? basisChip(r.basis) : el("span", { class: "tag gray" }, "기본값"))))),
+      S.overview.rules.map(r => el("tr", {}, el("td", {}, r.label), el("td", {}, r.value == null ? "-" : r.value), el("td", {}, r.basis ? basisChip(r.basis) : el("span", { class: "tag gray" }, "기본값"))))),
     el("p", { class: "small muted" }, `전력 온실가스 배출계수 ${S.overview.co2_factor} kgCO2eq/kWh, 요금 단가·휴관 사용 비율·계약전력 여유율은 config.json의 energy 항목에서 바꿉니다.`)));
 }
 

@@ -13,12 +13,13 @@ from core.loaders import SUPPORTED, load_folder
 from core.server import App, HttpError, file_response
 from core.sources import safe_parts
 from core.store import Store
+from core.xlsx import CTYPE as XLSX, workbook
 
 import analysis
 import ingest
 import qa
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HERE = Path(__file__).resolve().parent
 SAMPLE = HERE / "sample_data"
 
@@ -165,6 +166,10 @@ def rule_summary(a):
             lines.append("먼저 볼 것: " + "; ".join(f["title"] for f in top) + ".")
     else:
         lines.append("점검 기준에 걸린 항목이 없습니다.")
+    tg = ov["target"]
+    if tg:
+        lines.append(f"지침의 감축 목표({tg['target_pct']:g}%) 대비 기온 보정 사용량은 {_pct(tg['change_pct'])}로, "
+                     + ("목표를 달성했습니다." if tg["gap_kwh"] == 0 else f"{tg['gap_kwh']:,}kWh를 더 줄여야 합니다."))
     for e in a.effects():
         if e.get("saved_pct") is not None:
             lines.append(f"{e['fac']} '{e['title']}'은 시행 후 {e['months']}개월 동안 기온을 감안해 {e['saved_pct']}% 줄었습니다.")
@@ -309,21 +314,61 @@ def report(req):
         bs = [b for b in f["basis"] if b]
         if bs:
             blocks.append(("note", "근거: " + ", ".join(_basis_text(b) for b in bs)))
+    tg = ov["target"]
+    if tg:
+        blocks += [("h1", "4. 감축 목표 진척"),
+                   ("p", f"목표: 기온 보정 전기 사용량 {tg['target_pct']:g}% 감축({_basis_text(tg['basis'])}). 최근 12개월(휴관 달 제외) 실제 {tg['actual']:,}kWh, "
+                         f"기준선 {tg['expected']:,}kWh, 변화 {_pct(tg['change_pct'])}. 목표까지 {tg['gap_kwh']:,}kWh 남음. "
+                         f"점검 결과의 초과 사용 {tg['fix_kwh']:,}kWh를 조치했다면 {_pct(tg['after_fix_pct'])}."),
+                   ("table", ["시설", "실제(kWh)", "기준선(kWh)", "기온 보정 변화"],
+                    [[x["name"], f"{x['actual']:,}", f"{x['expected']:,}", _pct(x["change_pct"])] for x in tg["facilities"]], [3, 2, 2, 2])]
+    ol = ov["outlook"]
+    if ol and ol["rows"]:
+        blocks += [("h2", f"{ol['ym']} 시설별 관리 목표"),
+                   ("table", ["시설", "예상 사용량(kWh)", "점검선(kWh)", "예상 전력량요금(원)"],
+                    [[x["name"], f"{x['expected']:,}", f"{x['limit']:,}", f"{x['cost']:,}" if x["cost"] else ""] for x in ol["rows"]], [3, 2, 2, 2]),
+                   ("note", "※ " + ol["note"])]
     eff = a.effects()
     if eff:
-        blocks += [("h1", "4. 절감 조치 이행·효과"),
+        blocks += [("h1", "5. 절감 조치 이행·효과"),
                    ("table", ["시설", "조치", "시행일", "상태", "효과(기온 보정)"],
                     [[e["fac"], e["title"], e["date"], e["state"],
                       f"{e['saved_kwh']:,}kWh ({e['saved_pct']}%), {e['saved_won']:,}원, {e['co2_t']}tCO2eq ({e['from']}~{e['to']})" if e.get("saved_kwh") is not None else ""]
                      for e in eff], [2, 4, 2, 2, 5])]
-    blocks += [("h1", "5. 점검 기준과 계산 방법"),
-               ("table", ["기준", "값", "근거"], [[r["label"], f"{r['value']:g}", _basis_text(r["basis"]) if r["basis"] else "기본값(설정)"] for r in ov["rules"]], [4, 1, 4]),
+    blocks += [("h1", "6. 점검 기준과 계산 방법"),
+               ("table", ["기준", "값", "근거"], [[r["label"], "" if r["value"] is None else f"{r['value']:g}", _basis_text(r["basis"]) if r["basis"] else "기본값(설정)"] for r in ov["rules"]], [4, 1, 4]),
                ("p", "기온 보정: 기준 기간 12개월의 월 사용량을 '기저 + 냉방계수×냉방도일 + 난방계수×난방도일'로 맞추고, 이후 달의 기온만 감안한 예상치와 실제를 비교합니다(도일은 월평균기온으로 근사)."),
                ("note", "※ 금액은 고지서 단가와 설정값으로 계산한 추정치이며, 계약전력·요금 정정은 공급사 확인 후 확정됩니다.")]
     fmt = req.query.get("fmt", "hwpx")
     data, ctype = export(blocks, fmt)
     log("보고서 만들기", fmt)
     return file_response(data, f"에너지사용점검보고서_{ov['recent'][1]}.{fmt}", ctype)
+
+
+@app.post("/api/export-xlsx")
+def export_xlsx(req):
+    """점검 결과·시설별 월 내역·조치 효과를 엑셀 한 파일로."""
+    a = an()
+    ov = a.overview()
+    lv = {"bad": "조치 필요", "warn": "검토", "gray": "설정 확인"}
+    sheets = [("점검 결과", ["번호", "구분", "시설", "내용", "요약", "금액(원, 추정)", "계산식", "담당", "근거 조문", "근거 자료"],
+               [[f["id"], lv.get(f["level"], ""), f["fac"], f["title"], f["summary"], f.get("amount") or None, f.get("formula", ""), f["owner"],
+                 ", ".join(_basis_text(b) for b in f["basis"] if b), "; ".join(_cite_text(e.get("src")) for e in f["evidence"] if e.get("src"))]
+                for f in a.findings], [6, 10, 12, 40, 60, 14, 40, 14, 30, 50])]
+    rows = []
+    for (fac, kind), ser in sorted(a.series.items()):
+        for r in ser:
+            rows.append([fac, "전기" if kind == "elec" else "가스", r["ym"], r["temp"], r["actual"], r["expected"], r["diff_pct"],
+                         round(r["closed"] * 100) or None, r["cost"], "기준 기간" if r["baseline"] else "최근 12개월" if r["recent"] else "", _cite_text(r["src"])])
+    sheets.append(("시설별 월 내역", ["시설", "에너지", "연월", "월평균기온(℃)", "실제", "기온 보정 예상", "차이(%)", "휴관(%)", "요금(원)", "구간", "출처"],
+                   rows, [12, 8, 9, 10, 12, 12, 9, 8, 14, 11, 50]))
+    sheets.append(("조치 효과", ["시설", "조치", "시행일", "상태", "판정", "측정 기간", "줄인 전기(kWh)", "변화(%)", "줄인 요금(원, 추정)", "온실가스(tCO2eq)"],
+                   [[e["fac"], e["title"], e["date"], e["status"], e["state"], f"{e['from']}~{e['to']}" if e.get("from") else "",
+                     e.get("saved_kwh"), e.get("saved_pct"), e.get("saved_won"), e.get("co2_t")] for e in a.effects()],
+                   [12, 30, 11, 8, 14, 16, 14, 9, 16, 14]))
+    data = workbook(sheets, note=f"에너지 절감 비서 {VERSION} · 작성일 {date.today().isoformat()} · 금액은 고지서 단가와 설정값으로 계산한 추정치")
+    log("엑셀 내보내기", ov["recent"][1] if ov["recent"] else "")
+    return file_response(data, f"에너지점검_{ov['recent'][1] if ov['recent'] else ''}.xlsx", XLSX)
 
 
 def _pct(v):
