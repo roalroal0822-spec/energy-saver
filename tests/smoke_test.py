@@ -90,6 +90,10 @@ def checks(c):
     c.call("DELETE", f"/api/actions/{act['id']}")
     up = c.call("POST", "/api/upload", {"files": [{"path": "추가/메모.txt", "b64": base64.b64encode("메모".encode()).decode()}]})
     yield "자료 올리기(읽을 표가 없는 파일은 경고 없이 보관)", up["overview"]["latest"] == "2026-09"
+    ab = c.call("GET", "/api/about")
+    yield "서비스 구조·검증(처리 단계·안전장치·성적표)", len(ab["pipeline"]) >= 5 and len(ab["guards"]) >= 5 and ab["scorecard"] and ab["scorecard"]["areas"]
+    pq = c.call("POST", "/api/ask", {"q": "담당 010-1234-5678 체육센터 8월 전기 왜 늘었어?"})
+    yield "질문의 개인정보 가림", pq["masked"] == ["휴대전화"] and "010-1234" not in str(c.call("GET", "/api/log"))
     yield "다른 사이트 요청 차단", c.status("POST", "/api/reset", {}, {"Origin": "http://evil.example"}) == 403
     yield "올리기 경로 제한", c.status("POST", "/api/upload", {"files": [{"path": "../../x.exe", "b64": "AA=="}]}) == 400
     r = c.call("POST", "/api/reset", {})

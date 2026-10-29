@@ -17,6 +17,10 @@ def _facility(an, q):
         n = name.replace(" ", "")
         if n in qs:
             return name
+    for name, f in an.ds.facilities.items():  # '수영장 있는 시설'처럼 용도로 말한 경우(시설 현황의 용도 열)
+        for w in re.findall(r"[가-힣]{2,}", f.get("use") or ""):
+            if w not in ("시설", "지하") and (w in qs or (len(w) > 3 and w[-3:] in qs)):
+                return name
     for name in an.ds.facilities:  # '체육센터', '주차장'처럼 일부만 말한 경우
         for k in range(len(name), 1, -1):
             for i in range(0, len(name) - k + 1):
@@ -94,7 +98,7 @@ def facts_for(an, q):
                 lines.append(f"점검 결과: {f['title']}. 확인할 일: " + "; ".join(f["steps"][:3]))
             return facts, srcs, " ".join(lines)
 
-    topic = [("역률", "pf"), ("계약전력|기본요금|요금적용", "contract"), ("휴관|공사", "closure"),
+    topic = [("보일러|연소", "gas_excess"), ("역률", "pf"), ("계약전력|기본요금|요금적용", "contract"), ("휴관|공사", "closure"),
              ("고지서|요금.*(틀|맞|다르|오류)|청구", "bill")]
     for rx, t in topic:
         if re.search(rx, q):
@@ -185,7 +189,7 @@ def answer(an, q, llm=None):
     except LLMError as e:
         res["dropped"] = f"모델 응답 실패로 규칙 답을 보여 줍니다({e})"
         return res
-    allowed = _nums("\n".join(facts) + " " + q) | {float(i) for i in range(0, 13)}
+    allowed = _nums("\n".join(facts) + " " + q + " " + rule) | {float(i) for i in range(0, 13)}
     extra = sorted(n for n in _nums(text) if n not in allowed and round(n) not in allowed)
     if extra:
         res["dropped"] = f"모델 답에 사실에 없는 숫자({', '.join(str(x) for x in extra[:3])})가 있어 규칙 답을 보여 줍니다"

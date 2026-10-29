@@ -271,6 +271,7 @@ async function ask(q) {
     el("div", { class: "row" }, el("h3", { style: { flex: 1, margin: 0 } }, q), el("span", { class: "small muted" }, r.mode)),
     el("div", { class: "ans", style: { marginTop: "8px" } }, r.answer),
     r.dropped ? el("p", { class: "small", style: { color: "var(--warn)" } }, "※ " + r.dropped) : null,
+    r.masked && r.masked.length ? el("p", { class: "small muted" }, `※ 질문의 개인정보(${r.masked.join(", ")})를 ○○○로 가린 뒤 처리했습니다.`) : null,
     r.sources.length ? el("div", { class: "small muted", style: { marginTop: "8px" } }, "근거: ", citeChips(r.sources)) : null,
     r.facts.length ? el("details", { style: { marginTop: "8px" } }, el("summary", { class: "small muted" }, `답에 쓴 사실 ${r.facts.length}개`),
       el("ul", { class: "small" }, r.facts.map(f => el("li", {}, f)))) : null));
@@ -346,7 +347,7 @@ async function renderLog() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  GO = setupTabs(id => { if (id === "log") renderLog(); if (id === "fac" && S) renderFac(); });
+  GO = setupTabs(id => { if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) renderFac(); });
   $("#fac-sel").addEventListener("change", renderFac);
   $("#kind-sel").addEventListener("change", renderFac);
   $("#ask-btn").addEventListener("click", () => ask());

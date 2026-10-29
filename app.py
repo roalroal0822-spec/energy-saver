@@ -12,6 +12,7 @@ from core.llm import LLM, LLMError
 from core.loaders import SUPPORTED, load_folder
 from core.server import App, HttpError, file_response
 from core.sources import safe_parts
+from core.pii import mask
 from core.store import Store
 from core.xlsx import CTYPE as XLSX, workbook
 
@@ -40,6 +41,28 @@ store = Store(cfg.data_dir)
 SRC = store.path("source")
 app = App(HERE / "static")
 webcommon.register(app, cfg, llm, "에너지 절감 비서", VERSION)
+ABOUT = {
+    "lead": "모든 판단은 규칙과 계산으로 하고, 모델은 고지서 읽기와 문장 다듬기만 돕습니다. 모델이 없어도 같은 결과가 나옵니다.",
+    "pipeline": [("자료 읽기", "엑셀은 열 이름으로, 고지서 PDF는 항목 이름으로 읽고 모든 숫자에 파일·행을 붙임"),
+                 ("기온 보정 기준선", "기준 기간 12개월로 '기저+냉방도일+난방도일' 모델을 맞추고 설명력·오차율 공개"),
+                 ("기준값을 지침에서", "초과 10%·역률 90%·감축 목표 5% 같은 기준을 기관 지침 조문에서 읽음"),
+                 ("점검 6종", "초과 사용·가스·휴관 미정지·계약전력·역률·요금 재계산, 결과마다 근거와 계산식"),
+                 ("모델 보조(선택)", "못 읽은 고지서 칸, 답 문장 다듬기. 결과는 원문·사실과 대조"),
+                 ("근거 카드", "답·보고서에 원본 행과 지침 조문 원문을 그대로 붙임")],
+    "guards": ["판단(초과·미달·금액)은 모델이 하지 않고 계산으로만 합니다.",
+               "모델이 고지서에서 찾은 숫자는 고지서 원문에 그대로 있어야 받습니다.",
+               "모델 답·총평에 사실 목록에 없는 숫자가 하나라도 있으면 버리고 규칙 답을 씁니다.",
+               "점검 기준값은 지침 조문에서 읽고, 지침에 없는 값은 '기본값'으로 따로 표시합니다.",
+               "금액은 모두 '추정'으로 표시하고 계산식과 단가 출처(고지서·설정값)를 붙입니다.",
+               "휴관한 달은 초과 사용·조치 효과 계산에서 빼고, 휴관 기준으로 따로 봅니다.",
+               "질문에 적은 개인정보(전화·주민번호·계좌 등)는 저장·모델 전달 전에 ○○○로 가립니다.",
+               "원본 파일은 읽기만 하고, 작업 기록을 모두 남깁니다."],
+    "data": ["시연 자료는 모두 지어낸 모의자료입니다(시설 5곳, 2024.10~2026.09). 실제 기관 자료로 바꾸면 그대로 동작합니다.",
+             "월평균기온은 모의값입니다. 실제 사용 때는 기상청 관할 관측소 자료를 넣습니다.",
+             "요금 단가·배출계수는 설정값(config.json)이며 기관 계약종별 단가로 바꿔 씁니다.",
+             "자료는 이 PC의 작업 폴더(data)에만 저장되고, 화면은 이 PC에서만 열립니다."],
+}
+webcommon.register_about(app, HERE, ABOUT)
 
 STATE = {"an": None, "bills": [], "ds": None}
 
@@ -150,7 +173,9 @@ def ask(req):
     q = ((req.json or {}).get("q") or "").strip()
     if not q:
         raise HttpError(400, "질문을 입력하세요")
+    q, hidden = mask(q)
     r = qa.answer(an(), q, llm)
+    r["masked"] = hidden
     log("질문", q)
     return r
 
@@ -206,7 +231,7 @@ def add_action(req):
     a = an()
     f = next((x for x in a.findings if x["id"] == b.get("finding")), None)
     fac = b.get("fac") or (f["fac"] if f else "")
-    title = (b.get("title") or "").strip()
+    title = mask((b.get("title") or "").strip())[0]
     if not fac or not title:
         raise HttpError(400, "시설과 조치 내용을 입력하세요")
     d = b.get("date") or date.today().isoformat()
