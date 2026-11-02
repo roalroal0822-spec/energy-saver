@@ -1,0 +1,44 @@
+/* 에너지 절감 비서 고유 화면: '전력 계량판'. 밤 남색 바탕, 전기 노랑, 절감 초록, 흐르는 전력 파형 */
+:root {
+  --bg: #eef3f6; --panel: #ffffff; --ink: #0d1b2a; --muted: #5a6b7b; --line: #dde6ec; --line-strong: #c6d3dc;
+  --brand: #0a8f6a; --brand-strong: #077356; --brand-soft: #e2f6ef; --navy: #071320; --navy-2: #0d2238;
+  --volt: #ffc93c; --volt-soft: #fff5d6;
+  --shadow: 0 1px 0 rgba(7, 19, 32, .04), 0 10px 30px rgba(7, 19, 32, .07);
+  --focus: 0 0 0 3px rgba(255, 201, 60, .5);
+}
+::selection { background: var(--volt); color: var(--ink); }
+.gov-strip { background: #030a12; }
+.masthead { background: var(--navy); border-bottom: 1px solid rgba(255, 201, 60, .25); }
+.masthead b { color: #fff; } .masthead .ms-sub { color: rgba(255, 255, 255, .6); border-left-color: rgba(255, 255, 255, .2); }
+.masthead .ms-mark { background: var(--volt); color: var(--navy); border-radius: 50% 50% 50% 8px; }
+/* 머리: 밤하늘 전력망 + 흐르는 파형 */
+header.top { color: #fff; overflow: hidden; background:
+  radial-gradient(60% 80% at 80% 10%, rgba(10, 143, 106, .35), transparent 60%),
+  radial-gradient(50% 70% at 10% 90%, rgba(255, 201, 60, .18), transparent 60%),
+  linear-gradient(rgba(255, 255, 255, .04) 1px, transparent 1px) 0 0 / 40px 40px,
+  linear-gradient(90deg, rgba(255, 255, 255, .04) 1px, transparent 1px) 0 0 / 40px 40px, var(--navy); }
+header.top::after { content: ""; position: absolute; left: 0; right: 0; bottom: 6px; height: 70px; pointer-events: none; opacity: .9;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='70'%3E%3Cpath d='M0 35 Q25 5 50 35 T100 35 T150 35 T200 35 T250 35 T300 35 T350 35 T400 35' fill='none' stroke='%23ffc93c' stroke-width='2.5'/%3E%3Cpath d='M0 45 Q25 25 50 45 T100 45 T150 45 T200 45 T250 45 T300 45 T350 45 T400 45' fill='none' stroke='%230a8f6a' stroke-width='2' opacity='.8'/%3E%3C/svg%3E") repeat-x 0 0 / 400px 70px;
+  animation: flow 6s linear infinite; }
+@keyframes flow { to { background-position: 400px 0; } }
+header.top .mark { background: var(--volt); box-shadow: 0 0 0 8px rgba(255, 201, 60, .15), 0 0 40px rgba(255, 201, 60, .6); border-radius: 50%; }
+header.top .mark svg { stroke: var(--navy); fill: var(--navy); }
+header.top .eyebrow { color: var(--volt); letter-spacing: .12em; font-weight: 700; }
+header.top h1 { color: #fff; font-weight: 900; letter-spacing: -.04em; }
+
+header.top .sub { color: rgba(255, 255, 255, .8); }
+header.top .highlights li { background: rgba(255, 255, 255, .05); border: 1px solid rgba(255, 255, 255, .12); border-radius: 14px; padding: 14px 18px; }
+header.top .highlights b { color: var(--volt); } header.top .highlights span { color: rgba(255, 255, 255, .68); }
+/* 탭: 계량기 표시등 */
+nav.tabs { background: rgba(7, 19, 32, .94); border-bottom: 0; }
+nav.tabs button { color: rgba(255, 255, 255, .62); }
+nav.tabs button:hover { color: #fff; background: rgba(255, 255, 255, .06); }
+nav.tabs button.on, nav.tabs .tab-ink { background: var(--volt); }
+nav.tabs button.on, nav.tabs.inked button.on { color: var(--navy); }
+/* 카드: 계량판 */
+.panel { border-radius: 16px; border: 1px solid var(--line); position: relative; overflow: hidden; }
+.panel::before { content: ""; position: absolute; left: 0; top: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--brand), var(--volt)); }
+.panel h2 { letter-spacing: -.03em; }
+button.primary { background: var(--brand); border-color: var(--brand); }
+.stat .v, .stat b { font-variant-numeric: tabular-nums; }
+.foot { background: var(--navy); color: rgba(255, 255, 255, .55); }
