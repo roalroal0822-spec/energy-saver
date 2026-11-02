@@ -35,12 +35,12 @@ ENERGY = {
     "tariff": {"summer": [105, 160, 240], "spring": [100, 125, 155], "winter": [110, 155, 205]},
 }
 
-cfg = Config(HERE, {"app_title": "에너지 절감 비서", "port": 8104, "energy": ENERGY})
+cfg = Config(HERE, {"app_title": "한톨(에너지 절감 비서)", "port": 8104, "energy": ENERGY})
 llm = LLM(cfg["llm"])
 store = Store(cfg.data_dir)
 SRC = store.path("source")
 app = App(HERE / "static")
-webcommon.register(app, cfg, llm, "에너지 절감 비서", VERSION)
+webcommon.register(app, cfg, llm, "한톨(에너지 절감 비서)", VERSION)
 ABOUT = {
     "lead": "모든 판단은 규칙과 계산으로 하고, 모델은 고지서 읽기와 문장 다듬기만 돕습니다. 모델이 없어도 같은 결과가 나옵니다.",
     "pipeline": [("자료 읽기", "엑셀은 열 이름으로, 고지서 PDF는 항목 이름으로 읽고 모든 숫자에 파일·행을 붙임"),
@@ -306,7 +306,7 @@ def request_doc(req):
     bs = [b for b in f["basis"] if b]
     if bs:
         blocks += [("h2", "4. 관련 기준")] + [("p", f"{_basis_text(b)}: {b['text']}") for b in bs]
-    blocks += [("p", "점검 결과와 조치 계획(시행일 포함)을 회신해 주시면 에너지 절감 비서에 등록하여 효과를 측정하겠습니다.")]
+    blocks += [("p", "점검 결과와 조치 계획(시행일 포함)을 회신해 주시면 한톨(에너지 절감 비서)에 등록하여 효과를 측정하겠습니다.")]
     fmt = req.query.get("fmt", "hwpx")
     data, ctype = export(blocks, fmt)
     log("점검 요청서 만들기", f["title"])
@@ -391,7 +391,7 @@ def export_xlsx(req):
                    [[e["fac"], e["title"], e["date"], e["status"], e["state"], f"{e['from']}~{e['to']}" if e.get("from") else "",
                      e.get("saved_kwh"), e.get("saved_pct"), e.get("saved_won"), e.get("co2_t")] for e in a.effects()],
                    [12, 30, 11, 8, 14, 16, 14, 9, 16, 14]))
-    data = workbook(sheets, note=f"에너지 절감 비서 {VERSION} · 작성일 {date.today().isoformat()} · 금액은 고지서 단가와 설정값으로 계산한 추정치")
+    data = workbook(sheets, note=f"한톨(에너지 절감 비서) {VERSION} · 작성일 {date.today().isoformat()} · 금액은 고지서 단가와 설정값으로 계산한 추정치")
     log("엑셀 내보내기", ov["recent"][1] if ov["recent"] else "")
     return file_response(data, f"에너지점검_{ov['recent'][1] if ov['recent'] else ''}.xlsx", XLSX)
 
@@ -407,13 +407,13 @@ def get_log(req):
 
 def main():
     import argparse
-    ap = argparse.ArgumentParser(description="에너지 절감 비서 실행")
+    ap = argparse.ArgumentParser(description="한톨(에너지 절감 비서) 실행")
     ap.add_argument("--port", type=int, default=cfg["port"])
     ap.add_argument("--host", default=cfg["host"])
     ap.add_argument("--no-browser", action="store_true")
     ar = ap.parse_args()
     an()
-    app.run(ar.host, ar.port, not ar.no_browser, "에너지 절감 비서")
+    app.run(ar.host, ar.port, not ar.no_browser, "한톨(에너지 절감 비서)")
 
 
 if __name__ == "__main__":
