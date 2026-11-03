@@ -208,7 +208,7 @@ body { background: var(--bg); color: var(--ink); }
 .gov-strip .pill { color: #4a3424; }
 .gov-strip .live i { background: #ffc768; box-shadow: 0 0 0 3px rgba(255, 199, 104, .3); }
 .masthead, nav.tabs { background: #fffdf9; }
-.masthead .ms-mark { background: radial-gradient(circle at 35% 30%, #ffd48a, #ef8a2a 60%, #c9620f); box-shadow: 0 6px 16px -6px #ef8a2a; }
+.masthead .ms-mark { background: linear-gradient(140deg, #f0a040, #d0670f); box-shadow: 0 6px 16px -6px #ef8a2a; }
 .masthead .ms-mark svg { stroke-width: 1.9; }
 .fs-btn.on { background: var(--accent); }
 
@@ -218,10 +218,14 @@ body { background: var(--bg); color: var(--ink); }
               radial-gradient(800px 420px at 85% 0%, rgba(255, 214, 160, .7) 0%, transparent 70%),
               linear-gradient(180deg, #fffaf2 0%, #fdeedb 100%); }
 .kh-visual::after { display: none; }
-.kh-visual > .ht-sun { position: absolute !important; right: max(2vw, calc((100vw - 1400px) / 2)); bottom: -70px; width: 250px; height: 250px; z-index: 0; pointer-events: none; }
-.ht-sun::before { content: ""; position: absolute; inset: -30px; border-radius: 50%; background: radial-gradient(circle, rgba(255, 200, 110, .55) 0%, rgba(255, 200, 110, 0) 65%); animation: htglow 4s ease-in-out infinite; }
-.ht-sun svg { position: relative; width: 100%; height: 100%; filter: drop-shadow(0 18px 30px rgba(217, 122, 28, .35)); }
-@keyframes htglow { 50% { transform: scale(1.06); opacity: .8; } }
+.kh-visual > .ht-sun { position: absolute !important; right: max(2vw, calc((100vw - 1440px) / 2)); top: 50%; transform: translateY(-50%); width: 300px; height: 248px; z-index: 0; pointer-events: none;
+  -webkit-mask-image: radial-gradient(ellipse at 66% 40%, #000 30%, transparent 78%); mask-image: radial-gradient(ellipse at 66% 40%, #000 30%, transparent 78%); }
+.ht-sun svg { width: 100%; height: 100%; overflow: visible; }
+.ht-dots circle { fill: #dcc29e; }
+.ht-one { fill: #e8892a; filter: drop-shadow(0 0 10px rgba(232, 137, 42, .75)); }
+.ht-ring { fill: none; stroke: #e8892a; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: htring 3.2s ease-out infinite; }
+.ht-ring.r2 { animation-delay: 1.6s; }
+@keyframes htring { from { transform: scale(1); opacity: .7; } to { transform: scale(4.2); opacity: 0; } }
 .kh-eyebrow { color: #b0600f; letter-spacing: .28em; }
 header.top.hero.kh h1 { color: var(--ink); text-shadow: none; }
 header.top.hero.kh h1 em { color: #c4610c; }
@@ -248,3 +252,11 @@ table th { background: #f6eee2; }
 :root { --bar-recent: #e8973a; }
 body .chart .bar { fill: #f4dcb8; } body .chart .bar.recent { fill: #e8973a; } body .chart .bar.hit { fill: #d2452b; } body .chart .bar.closed { fill: #ddd3c6; }
 body .chart .base-bg { fill: #fbf1e3; } body .chart .exp { stroke: #4a3424; }
+/* 한톨 첫 화면: 글은 왼쪽, 오른쪽에 점 격자 속 빛나는 한 점 */
+.ht-dots circle, .ht-one { stroke: none; }
+body.on-home .kh-visual { align-items: flex-start; text-align: left; padding-left: max(24px, calc((100vw - 1200px) / 2)); padding-right: max(380px, calc((100vw - 1200px) / 2 + 360px)); }
+.kh-visual .kh-trust { justify-content: flex-start; }
+header.top.hero.kh .kh-visual h1 em { display: block; }
+.kh-visual > .ht-sun { right: max(24px, calc((100vw - 1260px) / 2)); width: 340px; height: 282px;
+  -webkit-mask-image: radial-gradient(ellipse at 66% 40%, #000 35%, transparent 80%); mask-image: radial-gradient(ellipse at 66% 40%, #000 35%, transparent 80%); }
+@media (max-width: 900px) { body.on-home .kh-visual { padding-right: 16px; } .kh-visual > .ht-sun { opacity: .35; } }
