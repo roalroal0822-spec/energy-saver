@@ -92,7 +92,7 @@ function targetPanel(t) {
   t.facilities.forEach((f, i) => {
     const y = 8 + i * rowH, v = f.change_pct, x0 = Math.min(cx, sx(v)), w = Math.max(2, Math.abs(sx(v) - cx));
     svg += `<text x="${L - 10}" y="${y + 17}" text-anchor="end" fill="#1d1d1f">${esc(f.name)}</text>`;
-    svg += `<rect x="${x0}" y="${y + 4}" width="${w}" height="18" rx="4" fill="${v > 0 ? "#ff3b30" : v <= -t.target_pct ? "#30d158" : "#6e9be0"}"/>`;
+    svg += `<rect x="${x0}" y="${y + 4}" width="${w}" height="18" rx="4" fill="${v > 0 ? "#ff3b30" : v <= -t.target_pct ? "#30d158" : "var(--bar-recent, #6e9be0)"}"/>`;
     svg += `<text x="${v > 0 ? sx(v) + 6 : x0 - 6}" y="${y + 17}" text-anchor="${v > 0 ? "start" : "end"}" fill="#1d1d1f">${pct(v)}</text>`;
   });
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -199,7 +199,7 @@ async function renderFac() {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("class", "chart"); s.innerHTML = svg;
   $("#fac-chart").replaceChildren(s, el("div", { class: "legend", style: { marginTop: "6px" } },
-    el("span", {}, el("i", { class: "dot", style: { background: "#6e9be0", borderRadius: "3px" } }), "실제(최근 12개월)"),
+    el("span", {}, el("i", { class: "dot", style: { background: "var(--bar-recent, #6e9be0)", borderRadius: "3px" } }), "실제(최근 12개월)"),
     el("span", {}, el("i", { class: "dot", style: { background: "#ff3b30", borderRadius: "3px" } }), "기준 초과"),
     el("span", {}, el("i", { class: "dot", style: { background: "#d1d1d6", borderRadius: "3px" } }), "휴관"),
     el("span", {}, "┅ 기온만 감안한 예상")));
