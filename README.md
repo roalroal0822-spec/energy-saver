@@ -12,6 +12,9 @@
 
 ## 접속 주소
 
+- **공개 시연판(설치 없이 바로 보기)**: https://energy-saver-scoe.onrender.com  
+  모의자료 전용이며, 무료 서버라 한동안 접속이 없으면 처음 열 때 30초~1분 걸릴 수 있습니다.
+
 실행하면 브라우저가 자동으로 열립니다. 열리지 않으면 **http://localhost:8104** 로 접속하세요.
 (포트 변경: `python run.py --port 9000` 또는 `config.json`의 `port`)
 
