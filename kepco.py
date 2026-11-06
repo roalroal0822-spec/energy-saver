@@ -39,12 +39,16 @@ def _get(path, **q):
             text = r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:  # 어느 주소가 왜 실패했는지 화면에 보이게(키는 넣지 않음)
         body = re.sub(r"<[^>]+>|\s+", " ", e.read().decode("utf-8", "replace")).strip()
+        if e.code == 404 and '"NotFound"' in body:  # 포털은 아직 공개 안 된 달·자료 없는 조건을 404 NotFound로 답한다
+            return {"data": []}
         raise RuntimeError(f"{path} HTTP {e.code} {body[:80]}".strip())
     try:
         d = json.loads(text)
     except ValueError:
         m = re.search(r"(인증|apiKey|error|오류|에러)[^<\n]{0,80}", text, re.I)
         raise RuntimeError(m.group(0) if m else "JSON이 아닌 응답")
+    if isinstance(d, dict) and str(d.get("errCd")) == "404":
+        return {"data": []}
     if not isinstance(d, dict) or not ("data" in d or "totData" in d):
         raise RuntimeError(str(d)[:100])
     return d

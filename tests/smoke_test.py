@@ -237,7 +237,14 @@ def fake_kepco():
             elif u.path.endswith("contractType.do"):
                 ym = f"{q['year']}-{q['month']}"
                 grow = 1.03 if q["year"] >= "2025" and ym >= "2025-10" else 1.0
-                body = {"data": [] if ym > "2026-07" or q.get("cityCd") != "320" else [
+                if ym > "2026-07":  # 실제 포털: 아직 공개 안 된 달은 HTTP 404 {"errCd":"404","errMsg":"NotFound"}
+                    b = _j.dumps({"errCd": "404", "errMsg": "NotFound"}).encode()
+                    self.send_response(404)
+                    self.send_header("Content-Length", str(len(b)))
+                    self.end_headers()
+                    self.wfile.write(b)
+                    return
+                body = {"data": [] if q.get("cityCd") != "320" else [
                     {"year": q["year"], "month": q["month"], "metro": "서울특별시", "city": "도봉구", "cntr": c, "custCnt": n,
                      "powerUsage": round(kwh * grow), "bill": round(kwh * grow * unit), "unitCost": unit, "cntrPwr": 1000}
                     for c, n, kwh, unit in (("일반용", 9000, 40000000, 120.0), ("교육용", 150, 6000000, 110.0), ("주택용", 140000, 33000000, 130.0))]}
