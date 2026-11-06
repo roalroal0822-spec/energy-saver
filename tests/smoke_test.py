@@ -129,6 +129,11 @@ def checks(c):
         K.parse_hub("#START7777\n# TM STN WS_AVG WR_DAY TA_AVG TA_MAX\n20260101 108 2.1 100 -3.4 1.2\n20260102 108 1.0 90 -99.0 0\n#7777END") == {"2026-01-01": -3.4}
         and K.parse_hub('{"response":{"body":{"items":{"item":[{"TM":"20260105","TA_AVG":"1.5"}]}}}}') == {"2026-01-05": 1.5}
         and K.parse_dgk('{"response":{"header":{"resultCode":"00"},"body":{"items":{"item":[{"tm":"2026-01-03","avgTa":"-1.0"},{"tm":"2026-01-04","avgTa":""}]}}}}') == {"2026-01-03": -1.0})
+    real = (ROOT / "tests" / "fixtures" / "kma_sfcdd3_sample.txt").read_text(encoding="utf-8")
+    yield "실제 API허브 응답(2015-12-11~14 서울) 읽기", K.parse_hub(real) == {"2015-12-11": 6.4, "2015-12-12": 5.2, "2015-12-13": 5.2, "2015-12-14": 5.0}
+    os.environ["KMA_APIHUB_KEY"], old_key = "https://apihub.kma.go.kr/api/typ01/url/kma_sfcdd3.php?tm1=1&authKey=ABC&help=1", os.environ.get("KMA_APIHUB_KEY", "")
+    yield "키 칸에 주소 전체를 넣어도 키만 씀", K.keys()["hub"] == "ABC"
+    os.environ["KMA_APIHUB_KEY"] = old_key
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13

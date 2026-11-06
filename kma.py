@@ -19,8 +19,16 @@ TIMEOUT = 8
 STN = os.environ.get("WEATHER_STN", "108")
 
 
+def _clean(v, name):
+    """키 칸에 주소 전체를 붙여 넣어도 키만 꺼낸다."""
+    v = v.strip().strip('"').strip("'")
+    m = re.search(name + r"=([^&\s]+)", v)
+    return urllib.parse.unquote(m.group(1)) if m else v
+
+
 def keys():
-    return {"hub": os.environ.get("KMA_APIHUB_KEY", "").strip(), "dgk": os.environ.get("DATA_GO_KR_KEY", "").strip()}
+    return {"hub": _clean(os.environ.get("KMA_APIHUB_KEY", ""), "authKey"),
+            "dgk": _clean(os.environ.get("DATA_GO_KR_KEY", ""), "serviceKey")}
 
 
 def provider():
