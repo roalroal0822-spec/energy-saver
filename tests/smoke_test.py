@@ -208,6 +208,13 @@ def kepco_checks(c, fk):
     real = kepco.parse_contract(_j.loads((ROOT / "tests/fixtures/kepco_contract_sample.json").read_text(encoding="utf-8")), "도봉구")
     yield "실제 한전 응답 형식(숫자가 글자, '5호미만제거' 행) 읽기 · 도봉구 일반용 175.4원/kWh", \
         set(real) == {"교육용", "심 야", "일반용", "주택용"} and real["일반용"]["unit"] == 175.4 and real["일반용"]["cust"] == 12888
+    op = c.call("GET", "/api/opinet")
+    it = {x["name"]: x for x in (op["data"] or {}).get("items", [])}
+    yield "국내 유가(오피넷) 자동 수집: 전국·서울 휘발유·경유·등유", op["key"] and not op["error"] and it.get("휘발유", {}).get("price") == 1667.33 \
+        and it["경유"]["sido"] == 1602.22 and op["data"]["sido_name"] == "서울"
+    m = len([s for s in fk.seen if s[0].endswith("avgAllPrice.do")])
+    c.call("GET", "/api/opinet")
+    yield "오피넷은 6시간에 한 번만 물음(하루 300회 한도)", len([s for s in fk.seen if s[0].endswith("avgAllPrice.do")]) == m
     n = len(fk.seen)
     c.call("GET", "/api/kepco")
     yield "받은 달은 다시 묻지 않음", len(fk.seen) == n
@@ -231,7 +238,15 @@ def fake_kepco():
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             H.seen.append((u.path, q))
-            if q.get("apiKey") != "kepco-test":
+            if u.path.endswith(("avgAllPrice.do", "avgSidoPrice.do")):  # 오피넷 흉내(안내서 응답 형식)
+                ok = q.get("certkey") == "opi-test" and q.get("out") == "json"
+                rows = [{"TRADE_DT": "20261105", "PRODCD": "B027", "PRODNM": "휘발유", "PRICE": "1667.33", "DIFF": "-0.23"},
+                        {"TRADE_DT": "20261105", "PRODCD": "D047", "PRODNM": "자동차용경유", "PRICE": "1532.22", "DIFF": "+0.39"},
+                        {"TRADE_DT": "20261105", "PRODCD": "C004", "PRODNM": "실내등유", "PRICE": "1295.23", "DIFF": "-0.72"}]
+                if u.path.endswith("avgSidoPrice.do"):
+                    rows = [{"SIDOCD": "01", "SIDONM": "서울", "PRODCD": r["PRODCD"], "PRICE": str(float(r["PRICE"]) + 70), "DIFF": "0"} for r in rows]
+                body = {"RESULT": {"OIL": rows if ok else []}}
+            elif q.get("apiKey") != "kepco-test":
                 body = {"errMsg": "인증키 오류"}
             elif u.path.endswith("commonCode.do"):
                 body = {"data": [{"uppoCd": "11", "uppoCdNm": "서울특별시", "codeTy": "cityCd", "code": "320", "codeNm": "도봉구"},
@@ -307,7 +322,7 @@ def main():
     fake = fake_kma()
     fk = fake_kepco()
     env = dict(os.environ, KEPCO_API_KEY="https://bigdata.kepco.co.kr/openapi/v1/commonCode.do?codeTy=metroCd&apiKey=kepco-test",
-               KEPCO_API_URL=f"http://127.0.0.1:{fk.server_port}/openapi/v1", KEPCO_METRO="11", KEPCO_CITY="도봉구", APP_DATA_DIR=tmp, LLM_PROVIDER="none", KMA_APIHUB_KEY="test-key",
+               KEPCO_API_URL=f"http://127.0.0.1:{fk.server_port}/openapi/v1", OPINET_KEY="opi-test", OPINET_URL=f"http://127.0.0.1:{fk.server_port}/api", KEPCO_METRO="11", KEPCO_CITY="도봉구", APP_DATA_DIR=tmp, LLM_PROVIDER="none", KMA_APIHUB_KEY="test-key",
                KMA_HUB_URL=f"http://127.0.0.1:{fake.server_port}/kma_sfcdd3.php")
     proc = subprocess.Popen([sys.executable, "run.py", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

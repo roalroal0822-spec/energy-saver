@@ -592,7 +592,28 @@ function budgetNextYear(n) {
         el("table", { class: "t" }, n.assume.map(a => el("tr", {}, el("td", {}, el("b", {}, a.k)), el("td", {}, a.v, el("div", { class: "small muted" }, a.detail)))))),
       el("div", { class: "panel" }, el("h3", {}, "국제유가(두바이유, 달러/배럴)"),
         o.has ? oilChart(o) : null,
-        el("p", { class: "small muted" }, o.note, " ", o.src ? srcChip(o.src) : null))));
+        el("p", { class: "small muted" }, o.note, " ", o.src ? srcChip(o.src) : null),
+        domesticOil())));
+}
+
+function domesticOil() {
+  const box = el("div", { class: "dom-oil" }, el("h3", { style: { marginTop: "18px" } }, "국내 유가(오피넷, 원/리터)"), el("div", { class: "small muted" }, "받는 중…"));
+  api("GET", "/api/opinet").then(r => {
+    const head = box.firstChild;
+    if (!r.key) { box.replaceChildren(head, el("p", { class: "small muted" }, "오피넷 인증키가 없어 표시하지 않습니다. 오피넷 '유가 API' 신청(무료, 바로 승인)으로 받은 키를 환경변수 OPINET_KEY에 넣으면 날마다 전국·시도 평균가격을 자동으로 받습니다.")); return; }
+    const d = r.data;
+    const err = r.error ? el("p", { class: "small", style: { color: "var(--warn)" } }, r.error) : null;
+    if (!d) { box.replaceChildren(head, err || el("p", { class: "small muted" }, "아직 받은 값이 없습니다.")); return; }
+    box.replaceChildren(...[head, err,
+      el("table", { class: "t" }, el("tr", {}, ["제품", "전국 평균", "전일 대비", d.sido_name ? d.sido_name + " 평균" : "시도 평균"].map(h => el("th", {}, h))),
+        d.items.map(x => el("tr", {}, el("td", {}, x.name), el("td", {}, x.price.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "원"),
+          el("td", { style: { color: x.diff > 0 ? "var(--bad)" : x.diff < 0 ? "var(--ok)" : "" } }, x.diff == null ? "-" : (x.diff > 0 ? "+" : "") + x.diff),
+          el("td", {}, x.sido == null ? "-" : x.sido.toLocaleString("ko-KR", { maximumFractionDigits: 2 }) + "원")))),
+      d.monthly.length > 1 ? el("table", { class: "t", style: { marginTop: "8px" } }, el("tr", {}, ["달", "휘발유", "경유", "실내등유", "받은 날"].map(h => el("th", {}, h))),
+        d.monthly.slice(-6).reverse().map(m => el("tr", {}, el("td", {}, m.ym), ...["휘발유", "경유", "실내등유"].map(k => el("td", {}, m[k] == null ? "-" : num(m[k]))), el("td", {}, m.n + "일")))) : null,
+      el("p", { class: "small muted" }, `${d.date} 기준 · 출처 ${d.src}. 국내 주유소 판매가격이라 참고용이며, 가스 단가 전망은 위 국제유가(두바이유)×환율 연동으로 계산합니다. 지난 달 가격을 한꺼번에 주는 API가 없어 받은 날이 쌓이면 달 평균이 나옵니다.`)].filter(Boolean));
+  }).catch(e => box.replaceChildren(box.firstChild, el("p", { class: "small", style: { color: "var(--warn)" } }, "국내 유가를 불러오지 못했습니다: " + (e.message || e))));
+  return box;
 }
 
 function budgetDocs() {

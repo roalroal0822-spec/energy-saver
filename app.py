@@ -21,6 +21,7 @@ import analysis
 import budget
 import ingest
 import kepco
+import opinet
 import kma
 import qa
 import recommend
@@ -449,6 +450,15 @@ def kepco_refresh(req):
     store.write("kepco_cache.json", cache)
     log("한전 자료", "다시 받기")
     return get_kepco(req)
+
+
+@app.get("/api/opinet")
+def get_opinet(req):
+    """국내 유가(오피넷). 국제유가 연동 계산에는 쓰지 않는 참고값."""
+    d, err = opinet.collect(store.read("opinet.json", {}))
+    if opinet.key():
+        store.write("opinet.json", d)
+    return {"key": bool(opinet.key()), "error": err, "data": opinet.summary(d), "sido": opinet.SIDO}
 
 
 @app.get("/api/recommend")

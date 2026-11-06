@@ -25,5 +25,7 @@ services:
         sync: false
       - key: KEPCO_API_KEY
         sync: false
+      - key: OPINET_KEY
+        sync: false
       - key: WEATHER_STN
         value: "108"
