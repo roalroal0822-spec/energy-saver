@@ -337,6 +337,7 @@ function renderData() {
     el("div", { class: "row", style: { marginTop: "12px" } }, bills,
       el("button", { onclick: async () => { await load(await api("POST", "/api/sample", { reset: true })); toast("모의자료(8월까지)로 되돌렸습니다"); } }, "모의자료 처음 상태로"),
       el("button", { class: "danger", onclick: async () => { await load(await api("POST", "/api/reset")); } }, "자료 모두 비우기"))));
+  box.append(kmaPanel(S.kma || {}));
   box.append(el("div", { class: "panel" }, el("h3", {}, `읽은 자료 (${d.months.length ? d.months[0] + " ~ " + d.months[1] : "없음"})`),
     el("p", { class: "small" }, `시설 ${d.facilities}곳 · 전력 ${d.elec}건 · 가스 ${d.gas}건 · 기온 ${d.weather}개월 · 조치 ${d.actions}건`),
     el("table", { class: "t" }, el("tr", {}, ["파일", "종류", "건수"].map(h => el("th", {}, h))),
@@ -354,6 +355,22 @@ function renderData() {
     el("table", { class: "t" }, el("tr", {}, ["기준", "값", "근거"].map(h => el("th", {}, h))),
       S.overview.rules.map(r => el("tr", {}, el("td", {}, r.label), el("td", {}, r.value == null ? "-" : r.value), el("td", {}, r.basis ? basisChip(r.basis) : el("span", { class: "tag gray" }, "기본값"))))),
     el("p", { class: "small muted" }, `전력 온실가스 배출계수 ${S.overview.co2_factor} kgCO2eq/kWh, 요금 단가·휴관 사용 비율·계약전력 여유율은 config.json의 energy 항목에서 바꿉니다.`)));
+}
+
+function kmaPanel(k) {
+  const on = !!k.on;
+  const set = async body => { toast(body.on === false ? "끄는 중…" : "기상청 기온 받는 중…"); await load(await api("POST", "/api/kma", body)); toast("반영했습니다"); };
+  let status;
+  if (!on) status = el("span", { class: "tag gray" }, "꺼짐 · 넣은 기온 파일 사용");
+  else if (k.error) status = el("span", { class: "tag bad" }, k.error);
+  else status = el("span", { class: "tag ok" }, `${k.months}개월 받음 (${(k.range || []).join(" ~ ")})` + (k.partial && k.partial.length ? ` · 덜 찬 달 ${k.partial.join(", ")}` : ""));
+  return el("div", { class: "panel", id: "kma-panel" },
+    el("div", { class: "row" }, el("h3", { style: { flex: 1, margin: 0 } }, "기온 자동 수집(기상청)"),
+      on ? el("button", { onclick: () => set({ refresh: true }) }, "다시 받기") : null,
+      el("button", { class: on ? "" : "primary", onclick: () => set({ on: !on }) }, on ? "끄기" : "켜기")),
+    el("p", { class: "small", style: { marginTop: "8px" } }, "상태: ", status),
+    el("p", { class: "small muted" }, k.provider ? `창구: ${k.label} · 지점 ${k.stn}` : "키가 없습니다. 기상청 API허브 키는 환경변수 KMA_APIHUB_KEY, 공공데이터포털 키는 DATA_GO_KR_KEY에 넣으세요(화면·파일에 적지 않음). 지점은 WEATHER_STN(기본 108 서울)."),
+    el("p", { class: "small muted" }, "켜면 내역이 있는 달의 기온을 기상청 지상관측(ASOS) 일자료로 바꾸고, 도일을 날마다 더해 계산합니다. 받은 달은 저장해 두고 다시 받지 않습니다. 시연용 모의자료는 모의 기온으로 만든 숫자라, 실제 기온으로 바꾸면 점검 결과가 달라집니다(실제 기관 자료를 넣을 때 켜세요)."));
 }
 
 async function renderLog() {

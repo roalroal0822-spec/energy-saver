@@ -5,6 +5,7 @@
 """
 import base64
 import json
+import urllib.parse
 import os
 import shutil
 import socket
@@ -17,6 +18,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def free_port():
@@ -113,6 +115,20 @@ def checks(c):
     yield "질문의 개인정보 가림", pq["masked"] == ["휴대전화"] and "010-1234" not in str(c.call("GET", "/api/log"))
     yield "다른 사이트 요청 차단", c.status("POST", "/api/reset", {}, {"Origin": "http://evil.example"}) == 403
     yield "올리기 경로 제한", c.status("POST", "/api/upload", {"files": [{"path": "../../x.exe", "b64": "AA=="}]}) == 400
+    s0 = c.call("GET", "/api/state")
+    k = c.call("POST", "/api/kma", {"on": True})
+    w = [f for f in k["data"]["files"] if "기상청" in f["kind"]]
+    yield (f"기온 자동 수집 켜기(가짜 기상청 서버, {k['kma']['months']}개월)",
+           k["kma"]["on"] and k["kma"]["months"] == 24 and not k["kma"]["error"] and w and w[0]["rows"] == 24)
+    sr = c.call("GET", "/api/series?fac=" + urllib.parse.quote("본부 청사") + "&kind=elec")
+    yield "받은 일별 기온으로 도일 계산(기온 20℃ 고정 → 냉방·난방 0)", all(x["temp"] == 20.0 for x in sr["rows"]) and (sr["model"] is None or sr["model"]["cdd"] == 0)
+    k2 = c.call("POST", "/api/kma", {"on": False})
+    yield "기온 자동 수집 끄면 넣은 파일 기온으로 돌아감", not k2["kma"]["on"] and len(k2["findings"]) == len(s0["findings"])
+    import kma as K
+    yield "응답 읽기: API허브 글자 표·JSON, 공공데이터포털 JSON", (
+        K.parse_hub("#START7777\n# TM STN WS_AVG WR_DAY TA_AVG TA_MAX\n20260101 108 2.1 100 -3.4 1.2\n20260102 108 1.0 90 -99.0 0\n#7777END") == {"2026-01-01": -3.4}
+        and K.parse_hub('{"response":{"body":{"items":{"item":[{"TM":"20260105","TA_AVG":"1.5"}]}}}}') == {"2026-01-05": 1.5}
+        and K.parse_dgk('{"response":{"header":{"resultCode":"00"},"body":{"items":{"item":[{"tm":"2026-01-03","avgTa":"-1.0"},{"tm":"2026-01-04","avgTa":""}]}}}}') == {"2026-01-03": -1.0})
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13
@@ -124,10 +140,41 @@ def _sheets(data):
     return load_workbook(io.BytesIO(data)).sheetnames
 
 
+def fake_kma():
+    """기상청 API허브 흉내: 요청한 기간의 날마다 일평균기온 20.0℃를 글자 표로 돌려준다."""
+    import threading
+    from datetime import date, timedelta
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            q = parse_qs(urlparse(self.path).query)
+            ok = q.get("authKey") == ["test-key"]
+            a, b = (date(int(x[:4]), int(x[4:6]), int(x[6:8])) for x in (q["tm1"][0], q["tm2"][0]))
+            lines = ["#START7777", "# TM STN WS_AVG WR_DAY TA_AVG TA_MAX TA_MIN"]
+            while ok and a <= b:
+                lines.append(f"{a:%Y%m%d} 108 2.0 100 20.0 25.0 15.0")
+                a += timedelta(days=1)
+            body = ("\n".join(lines + ["#7777END"]) if ok else "인증 실패").encode()
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    s = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    return s
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="smoke-energy-")
     port = free_port()
-    env = dict(os.environ, APP_DATA_DIR=tmp, LLM_PROVIDER="none")
+    fake = fake_kma()
+    env = dict(os.environ, APP_DATA_DIR=tmp, LLM_PROVIDER="none", KMA_APIHUB_KEY="test-key",
+               KMA_HUB_URL=f"http://127.0.0.1:{fake.server_port}/kma_sfcdd3.php")
     proc = subprocess.Popen([sys.executable, "run.py", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     total = failed = 0

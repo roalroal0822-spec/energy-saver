@@ -155,6 +155,10 @@ class Analysis:
         if not w:
             return None
         e = self.cfg["energy"]
+        days = w.get("days")
+        if days and w.get("full"):  # 기상청 일자료가 있으면 날마다 더한 실제 도일
+            return (sum(max(0.0, v - e["cdd_base"]) for v in days.values()),
+                    sum(max(0.0, e["hdd_base"] - v) for v in days.values()))
         d = ym_days(ym)
         return d * max(0.0, w["t"] - e["cdd_base"]), d * max(0.0, e["hdd_base"] - w["t"])
 

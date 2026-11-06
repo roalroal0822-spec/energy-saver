@@ -20,3 +20,8 @@ services:
         value: none
       - key: APP_DATA_DIR
         value: /tmp/app-data
+      # 기온 자동 수집(선택). 값은 Render 화면 Environment에서 직접 넣습니다.
+      - key: KMA_APIHUB_KEY
+        sync: false
+      - key: WEATHER_STN
+        value: "108"

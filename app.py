@@ -1,6 +1,7 @@
 """에너지 절감 비서 웹 서버."""
 import base64
 import shutil
+import time
 import uuid
 from datetime import date
 from pathlib import Path
@@ -19,6 +20,7 @@ from core.xlsx import CTYPE as XLSX, workbook
 import analysis
 import budget
 import ingest
+import kma
 import qa
 
 VERSION = "1.1.0"
@@ -66,7 +68,7 @@ ABOUT = {
                "질문에 적은 개인정보(전화·주민번호·계좌 등)는 저장·모델 전달 전에 ○○○로 가립니다.",
                "원본 파일은 읽기만 하고, 작업 기록을 모두 남깁니다."],
     "data": ["시연 자료는 모두 지어낸 모의자료입니다(시설 5곳, 2024.10~2026.09). 실제 기관 자료로 바꾸면 그대로 동작합니다.",
-             "월평균기온은 모의값입니다. 실제 사용 때는 기상청 관할 관측소 자료를 넣습니다.",
+             "월평균기온은 모의값입니다. 실제 사용 때는 '기온 자동 수집'을 켜면 기상청 지상관측(ASOS) 일자료로 바꿔 날마다 도일을 계산합니다(키 필요).",
              "요금 단가·배출계수는 설정값(config.json)이며 기관 계약종별 단가로 바꿔 씁니다.",
              "예산서(본예산·추경)와 국제유가·환율(실적·전망)도 모의값입니다. 기관 예산서와 한국석유공사 페트로넷·한국은행 자료로 바꿔 넣습니다.",
              "자료는 이 PC의 작업 폴더(data)에만 저장되고, 화면은 이 PC에서만 열립니다."],
@@ -88,6 +90,39 @@ def _copy_sample(with_bills):
             shutil.copy2(p, dst)
 
 
+def apply_kma(ds):
+    """기온 자동 수집이 켜져 있으면 내역이 있는 달의 기온을 기상청 일자료로 바꾼다(없는 달은 넣은 파일 값 유지)."""
+    st = store.read("kma.json", {"on": False})
+    info = {"on": bool(st.get("on")), "provider": kma.provider(), "label": kma.LABEL.get(kma.provider() or "", ""), "stn": kma.STN,
+            "months": 0, "partial": [], "error": "", "range": []}
+    if info["on"] and info["provider"] and ds.months:
+        first, last = ds.months[0], ds.months[-1]
+        months, ym = [], first
+        while ym <= last:
+            months.append(ym)
+            ym = ingest.ym_add(ym, 1)
+        cache = store.read("kma_cache.json", {})
+        last = STATE.get("kma_fail")
+        if last and time.time() - last[0] < 600:  # 실패 뒤 10분은 다시 묻지 않고 받아 둔 값만 씀(화면이 느려지지 않게)
+            got, err = {ym: cache[ym] for ym in months if ym in cache}, last[1]
+        else:
+            got, err = kma.collect(months, cache)
+            store.write("kma_cache.json", cache)
+            STATE["kma_fail"] = (time.time(), err) if err else None
+        for ym, w in got.items():
+            ds.weather[ym] = {"t": w["t"], "days": w["days"], "full": w["full"], "from_api": True,
+                              "src": {"file": w["src"], "loc": f"지점 {w['stn']} · {ym} 일자료 {w['n']}일", "quote": f"월평균기온 {w['t']}℃"}}
+        info.update(months=len(got), partial=[ym for ym, w in got.items() if not w["full"]], error=err,
+                    range=[min(got), max(got)] if got else [])
+        if got:
+            ds.files.append({"file": info["label"], "kind": "기온(기상청 자동 수집)", "rows": len(got)})
+        if err:
+            ds.warnings.append(err + " 넣은 기온 파일 값을 씁니다.")
+    elif info["on"] and not info["provider"]:
+        info["error"] = "키가 없어 자동 수집을 하지 못했습니다. 환경변수 KMA_APIHUB_KEY(기상청 API허브) 또는 DATA_GO_KR_KEY(공공데이터포털)를 넣어 주세요."
+    STATE["kma"] = info
+
+
 def user_actions():
     return store.read("actions.json", {"actions": []})["actions"]
 
@@ -98,6 +133,7 @@ def rebuild():
     ds, bills = ingest.build(docs, llm if llm.enabled else None)
     for s in skipped:
         ds.warnings.append(f"{s['file']}: {s['reason']}")
+    apply_kma(ds)
     acts = ds.actions + user_actions()
     an = analysis.Analysis(ds, cfg, acts).run()
     STATE.update(an=an, bills=bills, ds=ds)
@@ -119,8 +155,32 @@ def get_state(req):
     a = an()
     cur = budget.Budget(a, cfg).current()
     return {"overview": a.overview(), "findings": a.findings, "effects": a.effects(),
-            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled,
+            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled, "kma": STATE.get("kma"),
             "budget": {"fy": cur["fy"], "totals": cur.get("totals"), "items": [{k: i[k] for k in ("fac", "item", "state", "remain", "run_out")} for i in cur["items"]]} if cur else None}
+
+
+@app.get("/api/kma")
+def kma_status(req):
+    an()
+    return STATE.get("kma") or {}
+
+
+@app.post("/api/kma")
+def kma_set(req):
+    b = req.json or {}
+    st = store.read("kma.json", {"on": False})
+    if "on" in b:
+        st["on"] = bool(b["on"])
+        store.write("kma.json", st)
+        STATE["kma_fail"] = None
+        log("기온 자동 수집", "켬" if st["on"] else "끔")
+    if b.get("refresh"):
+        STATE["kma_fail"] = None
+        cache = store.read("kma_cache.json", {})
+        store.write("kma_cache.json", {k: v for k, v in cache.items() if v.get("full")})
+        log("기온 자동 수집", "덜 찬 달 다시 받기")
+    rebuild()
+    return get_state(req)
 
 
 # ------------------------------------------------------------ 예산
