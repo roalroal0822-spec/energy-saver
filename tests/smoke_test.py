@@ -140,6 +140,22 @@ def checks(c):
     os.environ["KMA_APIHUB_KEY"], old_key = "https://apihub.kma.go.kr/api/typ01/url/kma_sfcdd3.php?tm1=1&authKey=ABC&help=1", os.environ.get("KMA_APIHUB_KEY", "")
     yield "키 칸에 주소 전체를 넣어도 키만 씀", K.keys()["hub"] == "ABC"
     os.environ["KMA_APIHUB_KEY"] = old_key
+    bi = c.call("GET", "/api/budget/input")
+    yield "예산 입력: 엑셀 예산서 불러오기(9과목)", bi["fy"] == 2026 and len(bi["rows"]) == 9 and bi["source"].startswith("엑셀")
+    rows = [{k: v for k, v in x.items() if k != "manual"} for x in bi["rows"]]
+    for x in rows:
+        if x["fac"] == "종합체육센터" and x["item"] == "전기료":
+            x["supp2"] = 20000000
+    c.call("POST", "/api/budget/input", {"fy": 2026, "rows": rows})
+    bg = c.call("GET", "/api/budget")
+    gym = next(i for i in bg["current"]["items"] if i["fac"] == "종합체육센터" and i["item"] == "전기료")
+    yield "예산 입력: 제2회 추경 저장하면 판정이 바뀜(부족 → 적정)", gym["current"] == 350000000 and gym["state"] != "부족 예상"
+    n27 = c.call("GET", "/api/budget/input?fy=2027")
+    c.call("POST", "/api/budget/input", {"fy": 2027, "rows": [{k: v for k, v in x.items() if k != "manual"} for x in n27["rows"]]})
+    yield "내년 예산 입력을 앱 편성안과 비교", c.call("GET", "/api/budget")["next_year"]["totals"]["entered"] is not None
+    back = c.call("POST", "/api/budget/input", {"fy": 2026, "reset": True})
+    tpl = c.call("POST", "/api/budget/template", {"fy": 2026}, raw=True)
+    yield "엑셀 예산서로 되돌리기·예산서 양식 내려받기", back["source"].startswith("엑셀") and len(tpl) > 1000
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13

@@ -431,7 +431,8 @@ async function renderBudget() {
   if (!BUD) box.replaceChildren(el("div", { class: "panel" }, el("span", { class: "spinner" }), " 예산 계산 중"));
   const q = Object.entries(BOPT).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
   BUD = await api("GET", "/api/budget?" + q);
-  box.replaceChildren(...[budgetCurrent(BUD.current), budgetNextMonth(BUD.next_month), budgetNextYear(BUD.next_year), budgetDocs()].filter(Boolean));
+  box.replaceChildren(...[budgetCurrent(BUD.current), el("div", { id: "bud-input" }), budgetNextMonth(BUD.next_month), budgetNextYear(BUD.next_year), budgetDocs()].filter(Boolean));
+  renderBudgetInput();
 }
 
 function itemCum(i) {
@@ -564,8 +565,10 @@ function budgetNextYear(n) {
         el("div", { class: "stat" }, el("b", {}, man(t.risk)), el("span", { class: "lbl" }, "기후 위험 여유분(폭염·한파)")),
         el("div", { class: "stat" }, el("b", {}, o.has ? pct(o.gas_change_pct) : "-"), el("span", { class: "lbl" }, o.has ? `가스 단가(유가 ${o.now_avg}→${o.next_avg}달러)` : "유가 자료 없음")),
         el("div", { class: "stat" }, el("b", {}, num(t.co2_t)), el("span", { class: "lbl" }, t.target_pct ? `전기 온실가스 tCO2eq(목표 달성 시 ${num(t.co2_target_t)})` : "전기 온실가스 tCO2eq"))),
-      el("table", { class: "t", style: { marginTop: "14px" } }, el("tr", {}, ["시설", "과목", "요구액", "올해 예산현액", "증감", "기후 위험 여유분", "산출 근거"].map(h => el("th", {}, h))),
-        n.items.map(i => el("tr", {}, el("td", {}, i.fac), el("td", {}, i.item), el("td", {}, el("b", {}, won(i.request))), el("td", {}, man(i.prev_budget)),
+      el("table", { class: "t", style: { marginTop: "14px" } }, el("tr", {}, ["시설", "과목", "요구액", t.entered != null ? "입력한 예산(차이)" : null, "올해 예산현액", "증감", "기후 위험 여유분", "산출 근거"].filter(Boolean).map(h => el("th", {}, h))),
+        n.items.map(i => el("tr", {}, el("td", {}, i.fac), el("td", {}, i.item), el("td", {}, el("b", {}, won(i.request))),
+          t.entered != null ? el("td", {}, i.entered == null ? "-" : man(i.entered), i.entered == null ? null : el("div", { class: "small", style: { color: i.entered < i.request ? "var(--bad)" : "var(--muted)" } }, (i.entered - i.request >= 0 ? "+" : "") + man(i.entered - i.request))) : null,
+          el("td", {}, man(i.prev_budget)),
           el("td", { style: { color: i.change_pct > 0 ? "var(--bad)" : "var(--ok)" } }, i.change_pct == null ? "-" : pct(i.change_pct)), el("td", {}, man(i.risk)),
           el("td", { class: "small" }, i.basis)))),
       el("p", { class: "small muted" }, n.note)),
@@ -687,4 +690,67 @@ function scatterChart(M, r, mid) {
   const s = svgBox(W, H, g);
   return el("div", {}, s, el("div", { class: "small muted wx-legend" },
     el("span", {}, el("i", { style: { background: "var(--accent-strong)" } }), "최근 12개월"), el("span", {}, el("i", { style: { background: "#a9a39b" } }), "그 전")));
+}
+
+// ------------------------------------------------------------ 예산 입력(연도별 본예산·추경·전용)
+let BIN_FY = null;
+const nfmt = v => (v == null || v === "" ? "" : Number(v).toLocaleString("ko-KR"));
+const nparse = v => Number(String(v).replace(/[^\d-]/g, "")) || 0;
+
+async function renderBudgetInput() {
+  const box = $("#bud-input");
+  if (!box) return;
+  const d = await api("GET", "/api/budget/input" + (BIN_FY ? "?fy=" + BIN_FY : ""));
+  BIN_FY = d.fy;
+  const rows = d.rows.map(r => ({ ...r }));
+  const tbody = el("tbody");
+  const totalCell = el("td", { colspan: 2 }), totals = [0, 1, 2, 3, 4].map(() => el("td", { class: "num" }));
+  const recalc = () => {
+    const k = ["main", "supp1", "supp2", "transfer"];
+    k.forEach((f, i) => { totals[i].textContent = nfmt(rows.reduce((s, r) => s + (r[f] || 0), 0)); });
+    totals[4].replaceChildren(el("b", {}, nfmt(rows.reduce((s, r) => s + r.main + r.supp1 + r.supp2 + r.transfer, 0))));
+    rows.forEach(r => r._cur && (r._cur.textContent = nfmt(r.main + r.supp1 + r.supp2 + r.transfer)));
+  };
+  const money = (r, f) => el("input", { class: "num-in", inputmode: "numeric", value: nfmt(r[f]), "aria-label": f,
+    oninput: e => { r[f] = nparse(e.target.value); recalc(); }, onblur: e => { e.target.value = nfmt(r[f]); } });
+  const draw = () => {
+    tbody.replaceChildren(...rows.map((r, i) => {
+      r._cur = el("td", { class: "num" });
+      const sugg = d.suggest[`${r.fac}|${r.item}`];
+      return el("tr", {},
+        el("td", {}, r.fac), el("td", {}, r.item),
+        el("td", {}, money(r, "main"), sugg != null ? el("div", { class: "small muted" }, "앱 편성안 " + man(sugg)) : null),
+        el("td", {}, money(r, "supp1")), el("td", {}, money(r, "supp2")), el("td", {}, money(r, "transfer")), r._cur,
+        el("td", {}, el("input", { value: r.note || "", style: { width: "110px" }, oninput: e => { r.note = e.target.value; } })),
+        el("td", {}, el("button", { class: "icon-btn", title: "이 줄 빼기", onclick: () => { rows.splice(i, 1); draw(); } }, "×")));
+    }));
+    recalc();
+  };
+  const facSel = el("select", {}, ...d.facilities.map(f => el("option", { value: f }, f)));
+  const itSel = el("select", {}, ...d.items.map(f => el("option", { value: f }, f)));
+  const add = el("button", { onclick: () => {
+    if (rows.some(r => r.fac === facSel.value && r.item === itSel.value)) { toast("이미 있는 시설·과목입니다", true); return; }
+    rows.push({ fac: facSel.value, item: itSel.value, main: 0, supp1: 0, supp2: 0, transfer: 0, note: "" }); draw();
+  } }, "줄 추가");
+  const save = el("button", { class: "primary", onclick: async () => {
+    busy(save, true, "저장 중");
+    try { await api("POST", "/api/budget/input", { fy: d.fy, rows: rows.map(({ _cur, manual, ...r }) => r) }); toast(`${d.fy}년 예산을 저장하고 다시 계산했습니다`); await load(); }
+    finally { busy(save, false); }
+  } }, "저장하고 다시 계산");
+  const reset = d.source === "화면 입력" ? el("button", { onclick: async () => {
+    await api("POST", "/api/budget/input", { fy: d.fy, reset: true }); toast("화면 입력을 지우고 엑셀 예산서로 되돌렸습니다"); await load();
+  } }, "엑셀 예산서로 되돌리기") : null;
+  const yearBtn = y => el("button", { class: "seg" + (y === d.fy ? " on" : ""), onclick: () => { BIN_FY = y; renderBudgetInput(); } }, y === d.years[0] ? `${y}년(올해)` : `${y}년(내년)`);
+  box.replaceChildren(el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "예산 입력"), el("div", { class: "segs" }, ...d.years.map(yearBtn))),
+    el("p", { class: "small muted", style: { marginTop: "8px" } },
+      `지금 쓰는 ${d.fy}년 예산: `, el("b", {}, d.source), d.saved ? ` (${d.saved} 저장)` : "",
+      d.fy === d.years[1] ? " · 내년 예산을 넣으면 '예산 편성 근거'에서 앱 편성안과 나란히 비교합니다. 비어 있으면 앱 편성안을 미리 채워 둡니다(저장 전에는 반영 안 됨)." : " · 추경이 잡히면 해당 칸만 고쳐 저장하세요. 저장한 연도는 엑셀 예산서보다 화면 입력이 먼저입니다."),
+    el("div", { class: "tbl-scroll" }, el("table", { class: "t bud-in" },
+      el("thead", {}, el("tr", {}, ["시설", "과목", "본예산(원)", "제1회 추경", "제2회 추경", "전용(±)", "예산현액", "비고", ""].map(h => el("th", {}, h)))),
+      tbody, el("tfoot", {}, el("tr", {}, totalCell, ...totals, el("td", { colspan: 2 }))))),
+    el("div", { class: "row", style: { marginTop: "12px", gap: "8px", flexWrap: "wrap" } }, facSel, itSel, add, el("span", { style: { flex: 1 } }),
+      el("button", { onclick: () => download("/api/budget/template", { fy: d.fy }) }, "예산서 양식(엑셀)"), reset, save)));
+  totalCell.textContent = "합계";
+  draw();
 }

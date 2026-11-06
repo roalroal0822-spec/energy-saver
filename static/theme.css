@@ -273,3 +273,16 @@ svg.chart.wx rect:hover, svg.chart.wx circle:hover { stroke: var(--ink); stroke-
 body:not(.admin) .admin-only { display: none !important; }
 .admin-link { border: 0; background: none; color: var(--faint); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0 4px; }
 #wx .stat b { font-size: 28px; }
+
+/* 예산 입력 표 */
+.tbl-scroll { overflow-x: auto; margin-top: 12px; }
+.bud-in td { vertical-align: top; }
+.bud-in td { padding-top: 6px; padding-bottom: 6px; }
+.bud-in input { padding: 6px 10px; min-height: 0; height: 34px; }
+.bud-in .num-in { width: 140px; text-align: right; font-variant-numeric: tabular-nums; }
+.bud-in td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bud-in tfoot td { font-weight: 600; border-top: 2px solid var(--line-strong); }
+.segs { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 99px; padding: 3px; gap: 2px; }
+.segs .seg { border: 0; background: none; border-radius: 99px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+.segs .seg.on { background: var(--accent); color: #fff; }
+.icon-btn { border: 0; background: none; font-size: 18px; color: var(--faint); cursor: pointer; padding: 2px 8px; }

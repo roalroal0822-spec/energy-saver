@@ -123,6 +123,25 @@ def apply_kma(ds):
     STATE["kma"] = info
 
 
+BUDGET_ITEMS = ["전기료", "가스료"]
+
+
+def apply_budget_input(ds):
+    """화면에서 입력한 연도 예산이 있으면 그 연도의 엑셀 예산서 대신 쓴다."""
+    st = store.read("budget_input.json", {"years": {}})
+    for fy, info in (st.get("years") or {}).items():
+        fy = int(fy)
+        ds.budget = [b for b in ds.budget if b["fy"] != fy]
+        for r in info.get("rows", []):
+            s1, s2 = r.get("supp1") or 0, r.get("supp2") or 0
+            ds.budget.append({"fy": fy, "fac": r["fac"], "item": r["item"], "main": r.get("main") or 0, "supp": s1 + s2,
+                              "transfer": r.get("transfer") or 0, "supp1": s1, "supp2": s2,
+                              "supp_cols": [c for c, v in (("제1회 추경", s1), ("제2회 추경", s2)) if v],
+                              "note": r.get("note", ""), "manual": True,
+                              "src": {"file": "화면 입력(예산 관리)", "loc": f"{fy}년 예산 입력 · {info.get('saved', '')}",
+                                      "quote": f"{r['fac']} {r['item']} 본예산 {r.get('main') or 0:,}원"}})
+
+
 def user_actions():
     return store.read("actions.json", {"actions": []})["actions"]
 
@@ -134,6 +153,7 @@ def rebuild():
     for s in skipped:
         ds.warnings.append(f"{s['file']}: {s['reason']}")
     apply_kma(ds)
+    apply_budget_input(ds)
     acts = ds.actions + user_actions()
     an = analysis.Analysis(ds, cfg, acts).run()
     STATE.update(an=an, bills=bills, ds=ds)
@@ -243,6 +263,7 @@ def load_sample(req):
     b = req.json or {}
     if b.get("reset"):
         store.remove_tree("source")
+        store.write("budget_input.json", {"years": {}})  # 처음 상태로: 화면에서 입력한 예산도 지움
     _copy_sample(bool(b.get("with_bills")))
     log("시연용 모의자료 불러오기", "고지서 포함" if b.get("with_bills") else "엑셀 내역")
     rebuild()
@@ -513,6 +534,93 @@ def report(req):
 
 def _won(v):
     return "" if v is None else f"{v:,.0f}"
+
+
+def _int(v):
+    try:
+        return int(round(float(str(v).replace(",", "").strip() or 0)))
+    except ValueError:
+        raise HttpError(400, f"숫자가 아닌 값이 있습니다: '{v}'")
+
+
+def _budget_rows(a, fy):
+    rows = [b for b in a.ds.budget if b["fy"] == fy or (b["fy"] is None and fy == (int(a.latest[:4]) if a.latest else None))]
+    return [{"fac": b["fac"], "item": b["item"], "main": round(b["main"]),
+             "supp1": round(b.get("supp1", b["supp"])), "supp2": round(b.get("supp2", 0)), "transfer": round(b["transfer"]),
+             "note": b.get("note", ""), "manual": bool(b.get("manual"))} for b in rows]
+
+
+def _cur_fy(a):
+    return int(a.latest[:4]) if a.latest else date.today().year
+
+
+@app.get("/api/budget/input")
+def budget_input_get(req):
+    return _budget_input(_int(req.query.get("fy") or _cur_fy(an())))
+
+
+def _budget_input(fy):
+    a = an()
+    cur = _cur_fy(a)
+    rows = _budget_rows(a, fy)
+    st = store.read("budget_input.json", {"years": {}})
+    saved = (st.get("years") or {}).get(str(fy))
+    files = sorted({b["src"]["file"] for b in a.ds.budget if b["fy"] in (fy, None) and not b.get("manual") and b.get("src")})
+    suggest = {}
+    if fy == cur + 1:
+        ny = budget.Budget(a, cfg).next_year() or {}
+        suggest = {f"{i['fac']}|{i['item']}": i["request"] for i in ny.get("items", [])}
+        if not rows:  # 내년 예산이 아직 없으면 앱 편성안을 본예산 칸에 미리 채워 둔다(저장 전까지는 반영 안 됨)
+            rows = [{"fac": i["fac"], "item": i["item"], "main": i["request"], "supp1": 0, "supp2": 0, "transfer": 0, "note": "앱 편성안", "manual": False}
+                    for i in ny.get("items", [])]
+    if not rows:
+        rows = [{"fac": f, "item": it, "main": 0, "supp1": 0, "supp2": 0, "transfer": 0, "note": "", "manual": False}
+                for f in a.ds.facilities for it, k in budget.KIND.items() if (f, k) in a.series]
+    return {"fy": fy, "years": [cur, cur + 1], "rows": rows, "suggest": suggest,
+            "source": "화면 입력" if saved else ("엑셀: " + ", ".join(files) if files else "없음"),
+            "saved": saved.get("saved") if saved else None, "facilities": list(a.ds.facilities), "items": BUDGET_ITEMS}
+
+
+@app.post("/api/budget/input")
+def budget_input_set(req):
+    b = req.json or {}
+    fy = _int(b.get("fy"))
+    if not 2000 <= fy <= 2100:
+        raise HttpError(400, "회계연도를 확인해 주세요")
+    st = store.read("budget_input.json", {"years": {}})
+    st.setdefault("years", {})
+    if b.get("reset"):
+        st["years"].pop(str(fy), None)
+        store.write("budget_input.json", st)
+        log("예산 입력", f"{fy}년 화면 입력 지우고 엑셀 예산서로 되돌림")
+    else:
+        rows, seen = [], set()
+        for r in b.get("rows") or []:
+            fac, item = str(r.get("fac") or "").strip(), str(r.get("item") or "").strip()
+            if not fac or item not in BUDGET_ITEMS:
+                raise HttpError(400, "시설과 과목(전기료·가스료)을 골라 주세요")
+            if (fac, item) in seen:
+                raise HttpError(400, f"{fac} {item}이(가) 두 번 들어 있습니다")
+            seen.add((fac, item))
+            rows.append({"fac": fac, "item": item, "main": _int(r.get("main")), "supp1": _int(r.get("supp1")), "supp2": _int(r.get("supp2")),
+                         "transfer": _int(r.get("transfer")), "note": str(r.get("note") or "")[:100]})
+        st["years"][str(fy)] = {"rows": rows, "saved": time.strftime("%Y-%m-%d %H:%M")}
+        store.write("budget_input.json", st)
+        log("예산 입력", f"{fy}년 {len(rows)}과목, 합계 {sum(x['main'] + x['supp1'] + x['supp2'] + x['transfer'] for x in rows):,}원")
+    rebuild()
+    return _budget_input(fy)
+
+
+@app.post("/api/budget/template")
+def budget_template(req):
+    fy = _int((req.json or {}).get("fy") or _cur_fy(an()))
+    rows = _budget_input(fy)["rows"]
+    data = workbook([(f"{fy}년 공공요금 예산", ["회계연도", "시설명", "세출예산 과목", "본예산(원)", "제1회 추경(원)", "제2회 추경(원)", "전용(원)", "비고"],
+                      [[fy, r["fac"], "공공요금 및 제세 > " + r["item"], r["main"], r["supp1"], r["supp2"], r["transfer"], r["note"]] for r in rows],
+                      [10, 16, 26, 16, 16, 16, 14, 20])],
+                    note="한톨 예산서 양식: 시설명은 전기·가스 내역과 같은 이름으로, 과목은 전기료·가스료가 들어가게 적고 '자료 넣기'에 올리세요. 금액은 원 단위.")
+    log("예산서 양식 내려받기", f"{fy}년")
+    return file_response(data, f"한톨_예산서양식_{fy}.xlsx", XLSX)
 
 
 @app.post("/api/budget/report")

@@ -299,6 +299,7 @@ class Budget:
         save = self.p["save_pct"] / 100
         cur = {(b["fac"], b["item"]): b["main"] + b["supp"] + b["transfer"] for b in self.ds.budget if b["fy"] in (None, self.fy)}
         this = {(i["fac"], i["item"]): i for i in (self.current() or {}).get("items", [])}
+        entered = {(b["fac"], b["item"]): b["main"] + b["supp"] + b["transfer"] for b in self.ds.budget if b["fy"] == ny}
         items = []
         for fac in self.ds.facilities:
             for item, kind in KIND.items():
@@ -339,7 +340,7 @@ class Budget:
                              + (f", 요금 인상 {self.p['gas_up_pct']:g}%" if self.p["gas_up_pct"] else "") + ")")
                 items.append({"fac": fac, "item": item, "kind": kind, "qty": round(q_t), "unit": UNIT[kind], "cost": round(c_t), "request": req,
                               "risk": ceil_k(risk), "prev_budget": round(prev) if prev is not None else None,
-                              "prev_expected": exp_now, "change_pct": round((req - prev) / prev * 100, 1) if prev else None,
+                              "prev_expected": exp_now, "entered": round(entered[(fac, item)]) if (fac, item) in entered else None, "change_pct": round((req - prev) / prev * 100, 1) if prev else None,
                               "basis": basis, "months": months, "price_from": pr.get("from"), "price_src": pr.get("src"),
                               "co2_t": round(q_t * self.co2 / 1000, 1) if kind == "elec" else None})
         req_t = sum(i["request"] for i in items)
@@ -351,6 +352,7 @@ class Budget:
         return {
             "fy": ny, "items": items,
             "totals": {"request": req_t, "risk": risk_t, "with_risk": req_t + risk_t, "prev_budget": prev_t,
+                       "entered": round(sum(entered.values())) if entered else None,
                        "change_pct": round((req_t - prev_t) / prev_t * 100, 1) if prev_t else None,
                        "kwh": kwh, "co2_t": round(kwh * self.co2 / 1000, 1),
                        "target_pct": tg, "co2_target_t": round(kwh * (1 - (tg or 0) / 100) * self.co2 / 1000, 1) if tg else None},
