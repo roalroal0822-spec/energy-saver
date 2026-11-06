@@ -344,53 +344,114 @@ function addPhotos(at) {
   } });
   document.body.append(inp); inp.click();
 }
+const stripMarks = t => String(t).replace(/\*\*(.+?)\*\*|__(.+?)__/g, "$1$2");
+const BK_LABEL = { title: "제목", h1: "장 제목", h2: "소제목", h3: "소제목", p: "문단", bullet: "○ 항목", note: "※ 참고", summary: "핵심 요약", table: "표", image: "사진" };
+
+// 오른쪽: 읽기 전용 미리보기(한글 보고서와 같은 모양). 블록을 누르면 왼쪽 편집 칸으로 이동
+function reportPreview() {
+  let h1n = 0;
+  const go = i => () => { const t = document.getElementById("rbe-" + i); if (t) { t.scrollIntoView({ behavior: "smooth", block: "center" }); const f = t.querySelector("textarea,input"); if (f) f.focus({ preventScroll: true }); } };
+  return el("div", { class: "rep-doc" }, ...REP.map((b, i) => {
+    const k = b[0];
+    let body;
+    if (k === "title") body = el("div", { class: "rb-title" }, b[1]);
+    else if (k === "h1") body = el("div", { class: "rb-h1" }, `${ROMAN[h1n++] || h1n}. ${b[1].replace(/^\d+\.\s*/, "")}`);
+    else if (k === "h2" || k === "h3") body = el("div", { class: "rb-h2" }, "□ " + stripMarks(b[1]));
+    else if (k === "bullet") body = el("div", { class: "rb-bullet" }, "○ " + stripMarks(b[1]));
+    else if (k === "note") body = el("div", { class: "rb-note" }, stripMarks(b[1]));
+    else if (k === "p") body = el("div", { class: i > 0 && REP[i - 1][0] === "title" ? "rb-meta" : "rb-p" }, stripMarks(b[1]));
+    else if (k === "summary") body = el("div", { class: "rb-summary" }, el("div", { class: "rb-sum-t" }, "□ 핵심 요약"), ...b[1].map(x => el("div", { class: "rb-bullet" }, "○ " + stripMarks(x))));
+    else if (k === "table") body = el("div", { class: "tbl-scroll" }, el("table", { class: "rb-table" }, el("tr", {}, ...b[1].map(h => el("th", {}, h))), ...b[2].map(r => el("tr", {}, ...r.map(c => el("td", {}, c))))));
+    else if (k === "image") body = el("figure", { class: "rb-fig" }, el("img", { src: b[1], alt: b[2] || "첨부 사진" }), b[2] ? el("figcaption", {}, "<그림> " + b[2]) : null);
+    return el("div", { class: "rb", onclick: go(i), title: "눌러서 왼쪽에서 고치기" }, body);
+  }));
+}
+
+function refreshPreview() {
+  const pv = $("#rep-pv");
+  if (!pv) return;
+  const top = pv.scrollTop;
+  pv.replaceChildren(reportPreview());
+  pv.scrollTop = top;
+}
+
+// 왼쪽: AI 초안을 블록별로 고치는 칸. 고치면 오른쪽 미리보기가 바로 바뀐다
+function reportFields() {
+  let h1n = 0;
+  const area = (val, set, rows) => {
+    const t = el("textarea", { rows: rows || Math.min(8, Math.max(2, Math.ceil(String(val).length / 46))) }, String(val));
+    t.addEventListener("input", () => { set(t.value); refreshPreview(); });
+    return t;
+  };
+  const line = (val, set) => { const t = el("input", { value: val }); t.addEventListener("input", () => { set(t.value); refreshPreview(); }); return t; };
+  const tools = i => el("span", { class: "rbe-tools" },
+    el("button", { class: "icon-btn", title: "위로", disabled: i === 0, onclick: () => { [REP[i - 1], REP[i]] = [REP[i], REP[i - 1]]; drawReportEditor(); } }, "↑"),
+    el("button", { class: "icon-btn", title: "아래로", disabled: i === REP.length - 1, onclick: () => { [REP[i + 1], REP[i]] = [REP[i], REP[i + 1]]; drawReportEditor(); } }, "↓"),
+    el("button", { class: "small", onclick: () => { REP.splice(i + 1, 0, ["p", ""]); drawReportEditor(); } }, "+ 문단"),
+    el("button", { class: "small", onclick: () => addPhotos(i + 1) }, "+ 사진"),
+    el("button", { class: "small danger", onclick: () => { REP.splice(i, 1); drawReportEditor(); } }, "삭제"));
+  return REP.map((b, i) => {
+    const k = b[0];
+    let label = BK_LABEL[k] || k, body;
+    if (k === "h1") { const n = ++h1n; b[1] = `${n}. ${b[1].replace(/^\d+\.\s*/, "")}`; label = `${ROMAN[n - 1] || n}. 장 제목`;
+      body = line(b[1].replace(/^\d+\.\s*/, ""), v => (b[1] = `${n}. ${v}`)); }
+    else if (k === "title" || k === "h2" || k === "h3") body = line(b[1], v => (b[1] = v));
+    else if (k === "p" || k === "bullet" || k === "note") body = area(b[1], v => (b[1] = v));
+    else if (k === "summary") body = area(b[1].join("\n"), v => (b[1] = v.split("\n")), b[1].length + 1);
+    else if (k === "table") body = el("div", { class: "tbl-scroll" }, el("table", { class: "rbe-table" },
+      el("tr", {}, ...b[1].map((h, c) => el("th", {}, line(h, v => (b[1][c] = v))))),
+      ...b[2].map(r => el("tr", {}, ...r.map((cv, c) => el("td", {}, line(cv, v => (r[c] = v))))))));
+    else if (k === "image") body = el("div", { class: "row", style: { gap: "10px", alignItems: "center" } }, el("img", { class: "rbe-thumb", src: b[1], alt: "" }),
+      el("label", { style: { flex: 1 } }, el("div", { class: "small muted" }, "그림 설명"), line(b[2] || "", v => (b[2] = v))));
+    if (k === "summary") label += " (한 줄에 한 항목)";
+    return el("div", { class: "rbe", id: "rbe-" + i }, el("div", { class: "rbe-head" }, el("span", { class: "tag gray" }, label), el("span", { style: { flex: 1 } }), tools(i)), body);
+  });
+}
+
+async function aiRewriteSummary(btn) {
+  busy(btn, true, "총평 쓰는 중");
+  try {
+    const r = await api("POST", "/api/summary");
+    const i = REP.findIndex(b => b[0] === "h1" && /총평/.test(b[1]));
+    if (i >= 0 && REP[i + 1] && REP[i + 1][0] === "p") REP[i + 1][1] = r.text; else REP.splice(i >= 0 ? i + 1 : 2, 0, ["p", r.text]);
+    toast(`총평을 새로 썼습니다(${r.mode})`); drawReportEditor();
+  } finally { busy(btn, false); }
+}
+
+async function aiInsertRecommend(btn) {
+  busy(btn, true, "추천 불러오는 중");
+  try {
+    const r = await api("GET", "/api/recommend");
+    const items = r.items.filter(x => !x.registered);
+    if (!items.length) { toast("넣을 추천이 없습니다"); return; }
+    const at = REP.findIndex(b => b[0] === "h1" && /점검 기준과 계산/.test(b[1]));
+    const sec = [["h1", "추천 절감 조치"],
+      ["p", `점검 결과·실측 조치 효과·지침 조문을 바탕으로 고른 조치 ${items.length}건, 추천대로 하면 약 ${num(r.totals.save_won)}원(추정)을 줄일 수 있습니다.`],
+      ["table", ["시설", "조치", "이유", "줄일 수 있는 금액(원)"], items.map(x => [x.fac, x.title, stripMarks(x.why), x.save_won ? num(x.save_won) : "-"]), [2, 4, 6, 2]],
+      ["note", "※ " + r.note]];
+    REP.splice(at >= 0 ? at : REP.length, 0, ...sec);
+    toast(`추천 절감 조치 ${items.length}건을 보고서에 넣었습니다`); drawReportEditor();
+  } finally { busy(btn, false); }
+}
+
 function drawReportEditor() {
   const host = $("#rep-edit");
   if (!host || !REP) return;
-  let h1n = 0;
-  const ed = (tag, text, set, cls) => {
-    // **굵게**·__밑줄__ 표기는 화면에서만 숨긴다(고치지 않으면 내려받을 때 그대로 굵게·밑줄)
-    const n = el(tag, { class: "rb-text " + (cls || ""), contenteditable: "true", spellcheck: "false" }, String(text).replace(/\*\*(.+?)\*\*|__(.+?)__/g, "$1$2"));
-    n.addEventListener("input", () => set(n.innerText.replace(/\n$/, "")));
-    return n;
-  };
-  const tools = i => el("div", { class: "rb-tools" },
-    el("button", { class: "icon-btn", title: "위로", disabled: i === 0, onclick: () => { [REP[i - 1], REP[i]] = [REP[i], REP[i - 1]]; drawReportEditor(); } }, "↑"),
-    el("button", { class: "icon-btn", title: "아래로", disabled: i === REP.length - 1, onclick: () => { [REP[i + 1], REP[i]] = [REP[i], REP[i + 1]]; drawReportEditor(); } }, "↓"),
-    el("button", { class: "small", onclick: () => { REP.splice(i + 1, 0, ["p", "새 문단"]); drawReportEditor(); } }, "+ 문단"),
-    el("button", { class: "small", onclick: () => addPhotos(i + 1) }, "+ 사진"),
-    el("button", { class: "small danger", onclick: () => { REP.splice(i, 1); drawReportEditor(); } }, "삭제"));
-  const blocks = REP.map((b, i) => {
-    const k = b[0];
-    let body;
-    if (k === "title") body = ed("div", b[1], v => (b[1] = v), "rb-title");
-    else if (k === "h1") { const n = ++h1n; b[1] = `${n}. ${b[1].replace(/^\d+\.\s*/, "")}`;  // 순서를 바꿔도 Ⅰ·Ⅱ 번호가 다시 매겨지게
-      body = el("div", { class: "rb-h1" }, el("span", { class: "rb-num" }, (ROMAN[n - 1] || n) + ". "), ed("span", b[1].replace(/^\d+\.\s*/, ""), v => (b[1] = `${n}. ${v}`))); }
-    else if (k === "h2" || k === "h3") body = el("div", { class: "rb-h2" }, el("span", { class: "rb-num" }, "□ "), ed("span", b[1], v => (b[1] = v)));
-    else if (k === "bullet") body = el("div", { class: "rb-bullet" }, el("span", { class: "rb-num" }, "○ "), ed("span", b[1], v => (b[1] = v)));
-    else if (k === "note") body = ed("div", b[1], v => (b[1] = v), "rb-note");
-    else if (k === "p") body = ed("div", b[1], v => (b[1] = v), i > 0 && REP[i - 1][0] === "title" ? "rb-meta" : "");
-    else if (k === "summary") body = el("div", { class: "rb-summary" }, el("div", { class: "rb-sum-t" }, "□ 핵심 요약"),
-      ...b[1].map((ln, j) => el("div", { class: "rb-bullet" }, el("span", { class: "rb-num" }, "○ "), ed("span", ln, v => (b[1][j] = v)))));
-    else if (k === "table") body = el("div", { class: "tbl-scroll" }, el("table", { class: "rb-table" },
-      el("tr", {}, ...b[1].map((hd, c) => { const th = ed("th", hd, v => (b[1][c] = v)); return th; })),
-      ...b[2].map(r => el("tr", {}, ...r.map((cv, c) => ed("td", cv, v => (r[c] = v)))))));
-    else if (k === "image") {
-      const cap = el("input", { class: "rb-cap", value: b[2] || "", placeholder: "그림 설명(예: 종합체육센터 냉방기 실외기, 2026.08.)" });
-      cap.addEventListener("input", () => (b[2] = cap.value));
-      body = el("figure", { class: "rb-fig" }, el("img", { src: b[1], alt: b[2] || "첨부 사진" }), el("figcaption", {}, "<그림> ", cap));
-    } else body = el("div", {}, b[1]);
-    return el("div", { class: "rb rbk-" + k }, tools(i), body);
-  });
   const nImg = REP.filter(b => b[0] === "image").length;
+  const sumBtn = el("button", { class: "small", onclick: e => aiRewriteSummary(e.currentTarget) }, S.llm ? "AI로 총평 다시 쓰기" : "총평 다시 쓰기(규칙)");
+  const recBtn = el("button", { class: "small", onclick: e => aiInsertRecommend(e.currentTarget) }, "추천 절감 조치 넣기");
+  const left = el("div", { class: "rep-left" },
+    el("div", { class: "rep-ai" }, el("b", {}, "AI 초안"),
+      el("p", { class: "small muted" }, `아래 칸은 점검 결과로 만든 초안입니다${S.llm ? "(총평은 모델이 쓰고, 계산된 사실에 없는 숫자가 있으면 버립니다)" : ""}. 고치면 오른쪽 미리보기에 바로 반영됩니다.`),
+      el("div", { class: "row", style: { gap: "6px", flexWrap: "wrap" } }, sumBtn, recBtn, el("button", { class: "small", onclick: () => addPhotos(REP.length) }, "사진 넣기(맨 끝)"))),
+    ...reportFields());
+  const right = el("div", { class: "rep-right" }, el("div", { class: "rep-right-head small muted" }, `미리보기 · 블록을 누르면 왼쪽 칸으로 이동${nImg ? ` · 사진 ${nImg}장` : ""}`), el("div", { id: "rep-pv" }, reportPreview()));
   host.replaceChildren(el("div", { class: "panel" },
-    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "보고서 미리보기"),
-      el("button", { class: "small", onclick: () => addPhotos(REP.length) }, "사진 넣기(맨 끝)"),
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "보고서 고치기"),
+      el("span", { class: "small muted" }, "내려받기:"), exportButtons("/api/report", () => ({ blocks: REP })),
       el("button", { class: "small", onclick: () => openReportEditor(true) }, "처음 내용으로"),
       el("button", { class: "small", onclick: () => { REP = null; host.replaceChildren(); } }, "닫기")),
-    el("p", { class: "small muted" }, `글자를 눌러 바로 고칩니다. 블록에 마우스를 올리면 순서 바꾸기·문단 추가·사진 추가·삭제 단추가 나옵니다. 사진은 PNG·JPG·GIF, 한 장 8MB까지이며 가운데 정렬로 들어가고 아래에 설명이 붙습니다.${nImg ? ` (사진 ${nImg}장)` : ""}`),
-    el("div", { class: "row", style: { margin: "8px 0 14px" } }, el("span", { class: "small muted" }, "고친 내용으로 내려받기:"), exportButtons("/api/report", () => ({ blocks: REP }))),
-    el("div", { class: "rep-doc" }, ...blocks)));
+    el("div", { class: "rep-split" }, left, right)));
 }
 
 // ------------------------------------------------------------ 자료

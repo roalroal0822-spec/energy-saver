@@ -334,3 +334,24 @@ body:not(.admin) .admin-only { display: none !important; }
 .rb-fig figcaption { font-size: 13px; color: #333; margin-top: 6px; display: flex; justify-content: center; align-items: center; gap: 6px; }
 .rb-cap { border: 0; border-bottom: 1px dashed #aaa; width: 50%; max-width: 420px; text-align: center; font: inherit; background: transparent; }
 @media (max-width: 640px) { .rep-doc { padding: 20px 16px; } }
+
+.rep-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin-top: 12px; align-items: start; }
+.rep-left { max-height: 78vh; overflow: auto; padding-right: 4px; }
+.rep-right { position: sticky; top: 64px; }
+#rep-pv { max-height: 74vh; overflow: auto; }
+#rep-pv .rep-doc { padding: 28px 30px; font-size: 13.5px; }
+#rep-pv .rb { cursor: pointer; }
+.rep-right-head { margin-bottom: 6px; }
+.rep-ai { background: var(--accent-soft, #fdf1e3); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.rbe { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--card, #fff); }
+.rbe-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.rbe-tools { display: flex; gap: 4px; opacity: .55; }
+.rbe:hover .rbe-tools, .rbe:focus-within .rbe-tools { opacity: 1; }
+.rbe textarea, .rbe input { width: 100%; box-sizing: border-box; font: inherit; font-size: 13.5px; }
+.rbe-table { border-collapse: collapse; font-size: 12px; }
+.rbe-table td, .rbe-table th { padding: 1px; min-width: 80px; }
+.rbe-table input { padding: 3px 5px; font-size: 12px; }
+.rbe-table th input { font-weight: 700; background: #eef1f6; }
+.rbe-thumb { width: 96px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.rb-p { margin: 2px 0; }
+@media (max-width: 980px) { .rep-split { grid-template-columns: 1fr; } .rep-right { position: static; } .rep-left, #rep-pv { max-height: none; } }
