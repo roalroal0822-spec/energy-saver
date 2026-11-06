@@ -8,6 +8,7 @@
   ("table", header_list, rows_list[, col_widths])
   ("note", "※ 참고")
   ("summary", ["요약 줄", ...])  # 한글: 요약 상자, 그 밖: 글머리 목록
+  ("image", base64_또는_bytes, "그림 설명")  # PNG·JPEG·GIF, 가운데 정렬, 아래에 설명
 """
 import io
 import re
@@ -29,6 +30,37 @@ def _segments(text):
         else:
             out.append((part, False, False))
     return out
+
+
+def image_info(data):
+    """그림 바이트 → (형식, 가로, 세로). Pillow 없이 PNG·JPEG·GIF 머리만 읽는다. 모르는 형식이면 ValueError."""
+    import base64
+    import struct
+    if isinstance(data, str):
+        data = base64.b64decode(data.split(",", 1)[-1])
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = struct.unpack(">II", data[16:24])
+        return data, "png", w, h
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        w, h = struct.unpack("<HH", data[6:10])
+        return data, "gif", w, h
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                return data, "jpg", w, h
+            i += 2 + struct.unpack(">H", data[i + 2:i + 4])[0]
+    raise ValueError("PNG·JPEG·GIF 그림만 넣을 수 있습니다")
+
+
+def _img_mm(w, h, max_w=150, max_h=110):
+    s = min(max_w / max(w, 1), max_h / max(h, 1))
+    return w * s, h * s
 
 
 def plain(text):
@@ -53,6 +85,12 @@ def to_markdown(blocks):
             lines += [f"> {b[1]}", ""]
         elif kind == "summary":
             lines += ["**핵심 요약**", ""] + [f"- {x}" for x in b[1]] + [""]
+        elif kind == "image":
+            import base64
+            data, fmt, _, _ = image_info(b[1])
+            lines += [f"![{b[2] if len(b) > 2 else ''}](data:image/{'jpeg' if fmt == 'jpg' else fmt};base64,{base64.b64encode(data).decode()})", ""]
+            if len(b) > 2 and b[2]:
+                lines += [f"<그림> {b[2]}", ""]
         elif kind == "table":
             header, rows = b[1], b[2]
             esc = lambda s: str(s).replace("|", "\\|").replace("\n", "<br>")
@@ -198,6 +236,12 @@ def to_hwpx(blocks):
                 except Exception:
                     pass
             para("", {"spacing_after_pt": 4}, size=6)
+        elif kind == "image":
+            data, fmt, w, h = image_info(b[1])
+            wm, hm = _img_mm(w, h)
+            doc.add_picture(data, fmt, width_mm=wm, height_mm=hm, para_pr_id_ref=ppr(alignment="CENTER"))
+            if len(b) > 2 and b[2]:
+                para(f"<그림> {b[2]}", {"alignment": "CENTER", "spacing_after_pt": 6}, size=10, font=F_TABLE)
         prev = kind
         first = False
     return doc.to_bytes()
@@ -256,6 +300,16 @@ def to_docx(blocks):
                             par = cells[c].add_paragraph()
                         rich(par, line)
             d.add_paragraph()
+        elif kind == "image":
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import Mm
+            data, fmt, w, h = image_info(b[1])
+            wm, _ = _img_mm(w, h)
+            d.add_picture(io.BytesIO(data), width=Mm(wm))
+            d.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if len(b) > 2 and b[2]:
+                cp = d.add_paragraph(f"<그림> {b[2]}")
+                cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()

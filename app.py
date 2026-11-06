@@ -606,9 +606,53 @@ def _report_summary(a, ov):
     return out
 
 
+REPORT_KINDS = {"title", "h1", "h2", "h3", "p", "bullet", "note", "summary", "table", "image"}
+
+
+def _clean_blocks(raw):
+    """화면에서 고친 블록 목록을 검사해 내보내기 형식(튜플)으로 바꾼다."""
+    from core.export import image_info
+    out = []
+    for b in raw if isinstance(raw, list) else []:
+        if not isinstance(b, list) or not b or b[0] not in REPORT_KINDS:
+            raise HttpError(400, "보고서 내용 형식이 올바르지 않습니다")
+        k = b[0]
+        if k == "table":
+            out.append(("table", [str(x) for x in b[1]], [[str(c) for c in r] for r in b[2]], b[3] if len(b) > 3 else None))
+        elif k == "summary":
+            out.append(("summary", [str(x) for x in b[1] if str(x).strip()]))
+        elif k == "image":
+            try:
+                image_info(b[1])
+            except Exception as e:
+                raise HttpError(400, f"그림을 읽지 못했습니다: {e}")
+            out.append(("image", b[1], str(b[2]) if len(b) > 2 else ""))
+        else:
+            out.append((k, str(b[1])))
+    if not out:
+        raise HttpError(400, "보고서 내용이 비어 있습니다")
+    return out
+
+
+@app.get("/api/report/preview")
+def report_preview(req):
+    """화면 미리보기·수정용 보고서 블록(내려받기와 같은 내용)."""
+    return {"blocks": [list(b) for b in report_blocks(an())]}
+
+
 @app.post("/api/report")
 def report(req):
     a = an()
+    ov = a.overview()
+    b = req.json or {}
+    blocks = _clean_blocks(b["blocks"]) if b.get("blocks") else report_blocks(a)
+    fmt = req.query.get("fmt", "hwpx")
+    data, ctype = export(blocks, fmt)
+    log("보고서 만들기", fmt + (" (화면에서 고침)" if b.get("blocks") else ""))
+    return file_response(data, f"에너지사용점검보고서_{ov['recent'][1]}.{fmt}", ctype)
+
+
+def report_blocks(a):
     ov = a.overview()
     s = STATE.get("summary") or {"text": rule_summary(a), "mode": "규칙 기반"}
     t = ov["totals"]
@@ -658,10 +702,7 @@ def report(req):
                ("table", ["기준", "값", "근거"], [[r["label"], "" if r["value"] is None else f"{r['value']:g}", _basis_text(r["basis"]) if r["basis"] else "기본값(설정)"] for r in ov["rules"]], [4, 1, 4]),
                ("p", "기온 보정: 기준 기간 12개월의 월 사용량을 '기저 + 냉방계수×냉방도일 + 난방계수×난방도일'로 맞추고, 이후 달의 기온만 감안한 예상치와 실제를 비교합니다(도일은 월평균기온으로 근사)."),
                ("note", "※ 금액은 고지서 단가와 설정값으로 계산한 추정치이며, 계약전력·요금 정정은 공급사 확인 후 확정됩니다.")]
-    fmt = req.query.get("fmt", "hwpx")
-    data, ctype = export(blocks, fmt)
-    log("보고서 만들기", fmt)
-    return file_response(data, f"에너지사용점검보고서_{ov['recent'][1]}.{fmt}", ctype)
+    return blocks
 
 
 def _won(v):

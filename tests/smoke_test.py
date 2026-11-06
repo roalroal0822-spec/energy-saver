@@ -75,6 +75,21 @@ def checks(c):
             import io, zipfile
             sec = zipfile.ZipFile(io.BytesIO(d)).read("Contents/section0.xml").decode("utf-8")
             yield "한글 보고서 양식(핵심 요약 상자·Ⅰ 단계 제목·□/○ 기호)", all(x in sec for x in ("□ 핵심 요약", "Ⅰ. 총평", "○ "))
+    pv = c.call("GET", "/api/report/preview")["blocks"]
+    import base64 as _b, struct as _s, zlib as _z
+    def _png(w, h):
+        ch = lambda t, d: _s.pack(">I", len(d)) + t + d + _s.pack(">I", _z.crc32(t + d) & 0xffffffff)
+        return b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", _s.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + ch(b"IDAT", _z.compress(b"".join(b"\x00" + b"\x80\x80\x80" * w for _ in range(h)))) + ch(b"IEND", b"")
+    pv[0][1] = "고친 제목: 10월 에너지 점검"
+    pv.insert(3, ["image", "data:image/png;base64," + _b.b64encode(_png(60, 30)).decode(), "현장 사진 설명"])
+    d = c.call("POST", "/api/report?fmt=hwpx", {"blocks": pv}, raw=True)
+    import io as _io, zipfile as _zf
+    zz = _zf.ZipFile(_io.BytesIO(d))
+    sec = zz.read("Contents/section0.xml").decode("utf-8")
+    yield "보고서 미리보기에서 고친 제목·넣은 사진이 한글 파일에 들어감", "고친 제목: 10월 에너지 점검" in sec and "&lt;그림&gt; 현장 사진 설명" in sec \
+        and any(n.startswith("BinData/") for n in zz.namelist())
+    dx = c.call("POST", "/api/report?fmt=docx", {"blocks": pv}, raw=True)
+    yield "고친 보고서 워드로 받기(사진 포함)", any(n.startswith("word/media/") for n in _zf.ZipFile(_io.BytesIO(dx)).namelist())
     tg = s["overview"]["target"]
     yield "감축 목표를 지침 조문에서 읽고 진척 계산", tg and tg["target_pct"] == 5 and tg["basis"]["label"] == "제14조" and tg["gap_kwh"] > 0
     ol = s["overview"]["outlook"]

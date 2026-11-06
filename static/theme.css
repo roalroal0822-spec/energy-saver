@@ -309,3 +309,28 @@ body:not(.admin) .admin-only { display: none !important; }
 .chip.ext { background: #eef1f6; border-color: #d5dbe5; color: #3d4b61; }
 .per-bar .row { gap: 8px; flex-wrap: wrap; align-items: center; }
 .per-bar select { min-width: 110px; }
+
+/* 보고서 미리보기·고치기 */
+.rep-doc { background: #fff; color: #111; border: 1px solid var(--line); border-radius: 10px; padding: 40px 48px; max-width: 860px; margin: 0 auto; font-family: "Batang", "바탕", serif; line-height: 1.7; box-shadow: 0 2px 14px rgba(0,0,0,.05); }
+.rb { position: relative; padding: 2px 6px; border-radius: 6px; margin: 2px -6px; }
+.rb:hover { background: #f6f8fc; }
+.rb-tools { display: none; position: absolute; right: 4px; top: -14px; gap: 4px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 3px; z-index: 2; font-family: var(--font, sans-serif); }
+.rb:hover .rb-tools, .rb:focus-within .rb-tools { display: flex; }
+.rb-text:focus { outline: 2px solid #9db4d8; outline-offset: 2px; border-radius: 3px; }
+.rb-title { font-size: 22px; font-weight: 700; text-align: center; color: #1F3864; border-top: 3px solid #1F3864; border-bottom: 3px solid #1F3864; padding: 10px 0; margin: 4px 0 6px; }
+.rb-meta { text-align: right; font-size: 12px; color: #555; }
+.rb-summary { border: 1.5px solid #1F3864; background: #f3f6fb; padding: 10px 14px; margin: 8px 0; }
+.rb-sum-t { font-weight: 700; color: #1F3864; margin-bottom: 4px; }
+.rb-h1 { font-size: 17px; font-weight: 700; color: #1F3864; border-bottom: 1.5px solid #1F3864; margin-top: 14px; padding-bottom: 2px; }
+.rb-h2 { font-weight: 700; margin-top: 8px; }
+.rb-bullet { padding-left: 1.2em; text-indent: -1.2em; }
+.rb-note { font-size: 13px; color: #555; }
+.rb-num { color: #1F3864; }
+.rb-table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-family: var(--font, sans-serif); margin: 4px 0 8px; }
+.rb-table th, .rb-table td { border: 1px solid #7F8FA9; padding: 4px 6px; }
+.rb-table th { background: #DCE3EE; }
+.rb-fig { margin: 10px 0; text-align: center; }
+.rb-fig img { max-width: 80%; max-height: 420px; border: 1px solid var(--line); }
+.rb-fig figcaption { font-size: 13px; color: #333; margin-top: 6px; display: flex; justify-content: center; align-items: center; gap: 6px; }
+.rb-cap { border: 0; border-bottom: 1px dashed #aaa; width: 50%; max-width: 420px; text-align: center; font: inherit; background: transparent; }
+@media (max-width: 640px) { .rep-doc { padding: 20px 16px; } }
