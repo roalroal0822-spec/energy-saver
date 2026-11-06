@@ -7,6 +7,7 @@
   ("bullet", "항목")
   ("table", header_list, rows_list[, col_widths])
   ("note", "※ 참고")
+  ("summary", ["요약 줄", ...])  # 한글: 요약 상자, 그 밖: 글머리 목록
 """
 import io
 import re
@@ -50,6 +51,8 @@ def to_markdown(blocks):
             lines.append(f"- {b[1]}")
         elif kind == "note":
             lines += [f"> {b[1]}", ""]
+        elif kind == "summary":
+            lines += ["**핵심 요약**", ""] + [f"- {x}" for x in b[1]] + [""]
         elif kind == "table":
             header, rows = b[1], b[2]
             esc = lambda s: str(s).replace("|", "\\|").replace("\n", "<br>")
@@ -62,68 +65,140 @@ def to_markdown(blocks):
 
 
 # ---------------------------------------------------------------- HWPX
+# 정부 보고서 양식: 제목 상자(위아래 굵은 선) · 오른쪽 작성 정보 · 요약 상자 ·
+# Ⅰ/□/○/※ 단계 기호 · 머리행 음영 표 · 쪽 번호(- 1 -). 글꼴은 한글 기본 글꼴(HY헤드라인M·휴먼명조·맑은 고딕).
+
+NAVY = "#1F3864"
+ROMAN = "Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ Ⅶ Ⅷ Ⅸ Ⅹ".split()
+F_HEAD, F_BODY, F_TABLE = "HY헤드라인M", "휴먼명조", "맑은 고딕"
+
+
+def _roman(text):
+    m = re.match(r"^(\d+)\.\s*(.*)$", text)
+    if m and 1 <= int(m.group(1)) <= len(ROMAN):
+        return f"{ROMAN[int(m.group(1)) - 1]}. {m.group(2)}"
+    return text
+
 
 def to_hwpx(blocks):
     from hwpx import HwpxDocument
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     doc = HwpxDocument.new()
-    styles = {}
+    try:
+        doc.set_page_margins(left=5669, right=5669, top=4252, bottom=4252)  # 좌우 20mm, 위아래 15mm
+        doc.set_page_number(prefix="- ", suffix=" -")
+    except Exception:
+        pass
+    cstyle, pstyle = {}, {}
 
-    def style(bold=False, underline=False, size=None):
-        key = (bold, underline, size)
-        if key not in styles:
-            styles[key] = doc.ensure_run_style(bold=bold, underline=underline, size=size)
-        return styles[key]
+    def cs(bold=False, underline=False, size=11, font=F_BODY, color=None):
+        key = (bold, underline, size, font, color)
+        if key not in cstyle:
+            cstyle[key] = doc.ensure_run_style(bold=bold, underline=underline, size=size, font=font, color=color)
+        return cstyle[key]
 
-    def rich_para(para, text, size=None, bold_all=False):
+    def para(text="", fmt=None, **run):
+        p = doc.add_paragraph("", include_run=False)
         for seg, bold, und in _segments(text):
-            para.add_run(seg, char_pr_id_ref=style(bold or bold_all, und, size))
+            p.add_run(seg, char_pr_id_ref=cs(bold=bold or run.get("bold", False), underline=und, size=run.get("size", 12),
+                                             font=run.get("font", F_BODY), color=run.get("color")))
+        if fmt:
+            key = tuple(sorted(fmt.items()))
+            if key in pstyle:
+                p.para_pr_id_ref = pstyle[key]
+            else:
+                doc.set_paragraph_format(paragraph_index=len(doc.paragraphs) - 1, **fmt)
+                pstyle[key] = doc.paragraphs[-1].para_pr_id_ref
+        return p
 
+    def ppr(**fmt):
+        """표 안 문단에 쓸 문단 모양 id(본문에 임시 문단을 만들어 얻고 지운다)."""
+        key = tuple(sorted(fmt.items()))
+        if key not in pstyle:
+            para("", fmt)
+            doc.remove_paragraph(len(doc.paragraphs) - 1)
+        return pstyle[key]
+
+    def cell_text(cell, text, size=10, bold=False, font=F_TABLE, align=None, color=None):
+        cell.set_text("")
+        for li, line in enumerate(str(text).split("\n")):
+            cp = cell.paragraphs[0] if li == 0 else cell.add_paragraph("")
+            if align:
+                cp.para_pr_id_ref = ppr(alignment=align, line_spacing_percent=130)
+            for seg, b, und in _segments(line):
+                cp.add_run(seg, char_pr_id_ref=cs(bold=b or bold, underline=und, size=size, font=font, color=color))
+
+    def box(lines, fill, title=None):
+        t = doc.add_table(1, 1)
+        bf = doc.ensure_border_fill(border_color=NAVY, border_width="0.4 mm", fill_color=fill)
+        t.set_cell_border_fill(0, 0, bf)
+        c = t.cell(0, 0)
+        c.set_text("")
+        first = True
+        if title:
+            cp = c.paragraphs[0]
+            cp.add_run(title, char_pr_id_ref=cs(bold=True, size=12, font=F_HEAD, color=NAVY))
+            first = False
+        for ln in lines:
+            cp = c.paragraphs[0] if first else c.add_paragraph("")
+            first = False
+            cp.para_pr_id_ref = ppr(line_spacing_percent=160, indent_left_mm=2)
+            for seg, b, und in _segments("○ " + ln):
+                cp.add_run(seg, char_pr_id_ref=cs(bold=b, underline=und, size=11, font=F_BODY))
+        para("", {"spacing_after_pt": 4})
+
+    prev = None
     first = True
     for b in blocks:
         kind = b[0]
         if kind == "title":
-            p = doc.add_paragraph("", include_run=False) if not first else doc.paragraphs[0]
-            rich_para(p, b[1], size=16, bold_all=True)
-        elif kind in ("h1", "h2", "h3"):
-            size = {"h1": 14, "h2": 12, "h3": 11}[kind]
-            p = doc.add_paragraph("", include_run=False)
-            rich_para(p, b[1], size=size, bold_all=True)
-        elif kind in ("p", "note", "bullet"):
-            text = b[1] if kind != "bullet" else "• " + b[1]
-            for line in str(text).split("\n"):
-                p = doc.add_paragraph("", include_run=False)
-                rich_para(p, line)
+            t = doc.add_table(1, 1)
+            bf = doc.ensure_border_fill(border_color=NAVY, border_width="1.0 mm", active_borders=["top", "bottom"])
+            t.set_cell_border_fill(0, 0, bf)
+            cell_text(t.cell(0, 0), b[1], size=20, bold=False, font=F_HEAD, align="CENTER", color="#000000")
+            para("", {"spacing_after_pt": 2}, size=6)
+        elif kind == "p" and prev == "title":
+            para(b[1], {"alignment": "RIGHT", "spacing_after_pt": 10}, size=10, font=F_TABLE, color="#555555")
+        elif kind == "summary":
+            box(b[1], "#F3F5F9", "□ 핵심 요약")
+        elif kind == "h1":
+            para(_roman(b[1]), {"spacing_before_pt": 14, "spacing_after_pt": 6, "bottom_border": True, "border_color": NAVY,
+                                "border_width": "0.4 mm", "keep_with_next": True}, size=15, font=F_HEAD, color=NAVY)
+        elif kind in ("h2", "h3"):
+            para("□ " + b[1], {"spacing_before_pt": 8, "spacing_after_pt": 3, "keep_with_next": True}, size=13, bold=True)
+        elif kind == "p":
+            for line in str(b[1]).split("\n"):
+                para(line, {"indent_left_mm": 3, "line_spacing_percent": 160, "spacing_after_pt": 3}, size=12)
+        elif kind == "bullet":
+            para("○ " + b[1], {"indent_left_mm": 6, "first_line_indent_mm": -4, "line_spacing_percent": 160, "spacing_after_pt": 2}, size=12)
+        elif kind == "note":
+            txt = re.sub(r"^※\s*", "", str(b[1]))
+            para("※ " + txt, {"indent_left_mm": 6, "first_line_indent_mm": -4, "line_spacing_percent": 140, "spacing_after_pt": 4},
+                 size=10, font=F_TABLE, color="#555555")
         elif kind == "table":
             header, rows = b[1], b[2]
             ncol = max([len(header)] + [len(r) for r in rows])
             t = doc.add_table(len(rows) + 1, ncol)
+            hb = doc.ensure_border_fill(border_color="#7F8FA9", border_width="0.12 mm", fill_color="#DCE3EE")
+            cb = doc.ensure_border_fill(border_color="#7F8FA9", border_width="0.12 mm")
             for c in range(ncol):
-                t.set_cell_text(0, c, str(header[c]) if c < len(header) else "")
-                t.set_cell_shading(0, c, "EAF1FB")
+                t.set_cell_border_fill(0, c, hb)
+                cell_text(t.cell(0, c), header[c] if c < len(header) else "", size=10, bold=True, align="CENTER")
             for ri, r in enumerate(rows, 1):
                 for c in range(ncol):
                     val = str(r[c]) if c < len(r) and r[c] is not None else ""
-                    if RICH.search(val):
-                        cell = t.cell(ri, c)
-                        cell.set_text("")
-                        lines = val.split("\n")
-                        para = cell.paragraphs[0]
-                        for li, line in enumerate(lines):
-                            if li:
-                                para = cell.add_paragraph("")
-                            for seg, bold, und in _segments(line):
-                                para.add_run(seg, char_pr_id_ref=style(bold, und))
-                    else:
-                        t.set_cell_text(ri, c, val)
+                    t.set_cell_border_fill(ri, c, cb)
+                    numeric = bool(re.fullmatch(r"[-+]?[\d,.]+(%|원|건|kWh|㎥)?( \(.*\))?", val.strip()))
+                    cell_text(t.cell(ri, c), val, size=10, align="RIGHT" if numeric else None)
             if len(b) > 3 and b[3]:
                 try:
                     total = sum(b[3])
-                    width = 42520  # A4 본문 폭(HWPUNIT)
+                    width = 48188  # A4 폭 210mm - 좌우 여백 40mm (HWPUNIT)
                     t.set_column_widths([int(width * w / total) for w in b[3]])
                 except Exception:
                     pass
-            doc.add_paragraph("")
+            para("", {"spacing_after_pt": 4}, size=6)
+        prev = kind
         first = False
     return doc.to_bytes()
 
@@ -158,6 +233,10 @@ def to_docx(blocks):
                 rich(d.add_paragraph(), line)
         elif kind == "bullet":
             rich(d.add_paragraph(style="List Bullet"), b[1])
+        elif kind == "summary":
+            rich(d.add_paragraph(), "**핵심 요약**")
+            for x in b[1]:
+                rich(d.add_paragraph(style="List Bullet"), x)
         elif kind == "table":
             header, rows = b[1], b[2]
             ncol = max([len(header)] + [len(r) for r in rows])

@@ -71,6 +71,10 @@ def checks(c):
     for fmt in ("hwpx", "docx", "md"):
         d = c.call("POST", f"/api/report?fmt={fmt}", {}, raw=True)
         yield f"보고서 내보내기({fmt})", len(d) > 500
+        if fmt == "hwpx":
+            import io, zipfile
+            sec = zipfile.ZipFile(io.BytesIO(d)).read("Contents/section0.xml").decode("utf-8")
+            yield "한글 보고서 양식(핵심 요약 상자·Ⅰ 단계 제목·□/○ 기호)", all(x in sec for x in ("□ 핵심 요약", "Ⅰ. 총평", "○ "))
     tg = s["overview"]["target"]
     yield "감축 목표를 지침 조문에서 읽고 진척 계산", tg and tg["target_pct"] == 5 and tg["basis"]["label"] == "제14조" and tg["gap_kwh"] > 0
     ol = s["overview"]["outlook"]
@@ -122,6 +126,8 @@ def checks(c):
            k["kma"]["on"] and k["kma"]["months"] == 24 and not k["kma"]["error"] and w and w[0]["rows"] == 24)
     sr = c.call("GET", "/api/series?fac=" + urllib.parse.quote("본부 청사") + "&kind=elec")
     yield "받은 일별 기온으로 도일 계산(기온 20℃ 고정 → 냉방·난방 0)", all(x["temp"] == 20.0 for x in sr["rows"]) and (sr["model"] is None or sr["model"]["cdd"] == 0)
+    wx = c.call("GET", "/api/weather")
+    yield "기상 분석 자료(일별 기온·도일·사용량)", len(wx["months"]) == 24 and all(m["api"] and len(m["days"]) >= 28 for m in wx["months"]) and wx["months"][0]["kwh"] > 0
     k2 = c.call("POST", "/api/kma", {"on": False})
     yield "기온 자동 수집 끄면 넣은 파일 기온으로 돌아감", not k2["kma"]["on"] and len(k2["findings"]) == len(s0["findings"])
     import kma as K

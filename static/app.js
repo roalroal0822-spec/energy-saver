@@ -12,6 +12,7 @@ async function load(data) {
   renderHome(); renderFind(); renderFacSel(); renderAct(); renderReport(); renderData();
   BUD = null;
   if (!$("#tab-budget").hidden) renderBudget();
+  if (!$("#tab-fac").hidden) renderWeather();
 }
 
 function basisChip(b) {
@@ -380,8 +381,35 @@ async function renderLog() {
       r.items.map(i => el("tr", {}, el("td", {}, i.at), el("td", {}, i.action), el("td", {}, i.detail || "")))) : el("div", { class: "empty" }, "기록이 없습니다.")));
 }
 
+const ADMIN_TABS = ["log", "about"];
+function setupAdmin() {
+  let on = false;
+  try {
+    const q = new URLSearchParams(location.search).get("admin");
+    if (q != null) localStorage.setItem("hantol:admin", q === "1" ? "1" : "0");
+    on = localStorage.getItem("hantol:admin") === "1";
+    if (!on && ADMIN_TABS.includes(localStorage.getItem(location.pathname + ":tab"))) localStorage.removeItem(location.pathname + ":tab");
+  } catch (e) {}
+  const btn = $("#admin-toggle");
+  const apply = () => {
+    document.body.classList.toggle("admin", on);
+    if (btn) btn.textContent = on ? "관리자 모드 끄기" : "관리자 모드";
+    window.dispatchEvent(new Event("resize"));
+  };
+  if (btn) btn.addEventListener("click", () => {
+    on = !on;
+    try { localStorage.setItem("hantol:admin", on ? "1" : "0"); } catch (e) {}
+    apply();
+    if (!on && GO && ADMIN_TABS.some(t => !$("#tab-" + t).hidden)) GO("home");
+    toast(on ? "관리자 모드: 작업 기록·서비스 구조·검증 메뉴가 보입니다" : "관리자 모드를 껐습니다");
+    if (on) window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  apply();
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
-  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) renderFac(); });
+  setupAdmin();
+  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); } });
   $("#fac-sel").addEventListener("change", renderFac);
   $("#kind-sel").addEventListener("change", renderFac);
   $("#ask-btn").addEventListener("click", () => ask());
@@ -554,4 +582,109 @@ function budgetDocs() {
     el("p", { class: "small muted" }, "올해 집행 관리 현황(판정·조치 의견·전용 검토), 다음 달 예측, 내년 편성 근거(산출 근거·가정·유가·온실가스)를 한 문서로 만듭니다. 위에서 바꾼 가정값이 그대로 들어갑니다."),
     el("div", { class: "row" }, el("span", { class: "small muted" }, "내려받기:"), exportButtons("/api/budget/report", () => ({ ...BOPT })),
       el("button", { onclick: () => download("/api/export-xlsx", {}) }, "엑셀(XLSX)")));
+}
+
+// ------------------------------------------------------------ 기상 분석(기상청 기온)
+const WCOOL = [47, 109, 181], WWARM = [201, 102, 26], WMID = [240, 239, 236];
+function tempColor(v, mid) {
+  const k = Math.max(-1, Math.min(1, (v - mid) / 14)), p = k < 0 ? WCOOL : WWARM, a = Math.abs(k);
+  return `rgb(${WMID.map((m, i) => Math.round(m + (p[i] - m) * a)).join(",")})`;
+}
+function svgBox(W, H, inner) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("class", "chart wx"); s.innerHTML = inner;
+  return s;
+}
+const ymAdd = (ym, n) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5) - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+
+async function renderWeather() {
+  const box = $("#wx");
+  if (!box) return;
+  let r;
+  try { r = await api("GET", "/api/weather"); } catch (e) { box.replaceChildren(); return; }
+  const M = r.months;
+  if (!M.length) { box.replaceChildren(); return; }
+  const api_ = M.filter(m => m.api), mid = r.cdd_base;
+  const byYm = Object.fromEntries(M.map(m => [m.ym, m]));
+  const rec = M.filter(m => r.recent.includes(m.ym)), base = M.filter(m => r.baseline.includes(m.ym));
+  const sum = (a, k) => a.reduce((s, m) => s + m[k], 0);
+  const chg = (a, b) => (b ? (a - b) / b * 100 : null);
+  const avgT = a => a.length ? a.reduce((s, m) => s + m.t, 0) / a.length : null;
+  const days = rec.flatMap(m => Object.entries(m.days));
+  const hot = days.filter(([, v]) => v >= 25).length, cold = days.filter(([, v]) => v <= 0).length;
+  const mx = days.length ? days.reduce((a, b) => (b[1] > a[1] ? b : a)) : null, mn = days.length ? days.reduce((a, b) => (b[1] < a[1] ? b : a)) : null;
+  const tR = avgT(rec), tB = avgT(base);
+  const src = api_.length ? `기상청 지상관측(ASOS) 일자료 · 지점 ${r.kma.stn || ""} · ${api_.length}개월` : "넣은 기온 파일(월평균) · 기온 자동 수집을 켜면 일별 분석이 나옵니다";
+  const stat = (b, l, color) => el("div", { class: "stat" }, el("b", { style: color ? { color } : {} }, b), el("span", { class: "lbl" }, l));
+  const dpct = v => (v == null ? "-" : pct(v));
+  const kpis = el("div", { class: "kpis", style: { marginTop: "14px" } },
+    stat(tR == null ? "-" : tR.toFixed(1) + "℃", tB == null ? "최근 12개월 평균기온" : `최근 12개월 평균기온 (전년 ${tB.toFixed(1)}℃)`),
+    stat(dpct(chg(sum(rec, "cdd"), sum(base, "cdd"))), `냉방도일 전년 대비 (${num(sum(rec, "cdd"))})`, chg(sum(rec, "cdd"), sum(base, "cdd")) > 0 ? "var(--bad)" : null),
+    stat(dpct(chg(sum(rec, "hdd"), sum(base, "hdd"))), `난방도일 전년 대비 (${num(sum(rec, "hdd"))})`, chg(sum(rec, "hdd"), sum(base, "hdd")) > 0 ? "var(--bad)" : null),
+    days.length ? stat(`${hot}일 · ${cold}일`, "일평균 25℃ 이상 · 0℃ 이하 (최근 12개월)") : null,
+    mx ? stat(`${mx[1]} · ${mn[1]}℃`, `가장 더운 날(${+mx[0].slice(5, 7)}.${+mx[0].slice(8)}.) · 추운 날(${+mn[0].slice(5, 7)}.${+mn[0].slice(8)}.) 일평균`) : null);
+
+  const panels = [];
+  if (api_.length) panels.push(el("div", { class: "panel" }, el("h3", {}, "날마다의 기온"),
+    el("p", { class: "small muted" }, `칸 하나가 하루입니다. ${mid}℃(냉난방이 필요 없는 기준 온도)에서 멀수록 진하게, 더우면 주황, 추우면 파랑입니다. 칸에 마우스를 올리면 날짜와 기온이 보입니다.`),
+    heatmap(api_, mid)));
+  panels.push(el("div", { class: "grid2" },
+    el("div", { class: "panel" }, el("h3", {}, "달별 기온, 전년 같은 달과의 차이"),
+      el("p", { class: "small muted" }, "위로 솟으면 전년보다 더웠던 달, 아래로 내려가면 추웠던 달입니다(최근 12개월)."), anomalyChart(rec, byYm)),
+    el("div", { class: "panel" }, el("h3", {}, "기온과 전기 사용량"),
+      el("p", { class: "small muted" }, `점 하나가 한 달(전체 시설 합계)입니다. ${mid}℃에서 멀어질수록 냉난방 때문에 사용량이 늘어납니다.`), scatterChart(M, r, mid))));
+  box.replaceChildren(el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "기상 분석"), el("span", { class: "small muted" }, src)), kpis), ...panels);
+}
+
+function heatmap(ms, mid) {
+  const cw = 30, ch = 18, L = 52, T = 22, W = L + 31 * cw + 10, H = T + ms.length * ch + 40;
+  let g = "";
+  for (let d = 1; d <= 31; d += (d === 1 ? 4 : 5)) g += `<text x="${L + (d - 1) * cw + cw / 2}" y="${T - 7}" text-anchor="middle">${d}일</text>`;
+  ms.forEach((m, i) => {
+    const y = T + i * ch;
+    g += `<text x="${L - 8}" y="${y + ch - 5}" text-anchor="end">${ymLabel(m.ym)}</text>`;
+    Object.entries(m.days).forEach(([d, v]) => {
+      const x = L + (+d.slice(8) - 1) * cw;
+      g += `<rect x="${x + 1}" y="${y + 1}" width="${cw - 2}" height="${ch - 2}" rx="3" fill="${tempColor(v, mid)}"><title>${d} 일평균 ${v}℃</title></rect>`;
+    });
+  });
+  const ly = T + ms.length * ch + 16, lw = 240, lx = W - lw - 10;
+  g += `<defs><linearGradient id="wxg"><stop offset="0" stop-color="${tempColor(mid - 14, mid)}"/><stop offset=".5" stop-color="${tempColor(mid, mid)}"/><stop offset="1" stop-color="${tempColor(mid + 14, mid)}"/></linearGradient></defs>`;
+  g += `<rect x="${lx}" y="${ly}" width="${lw}" height="10" rx="5" fill="url(#wxg)"/><text x="${lx - 8}" y="${ly + 9}" text-anchor="end">${mid - 14}℃ 이하</text><text x="${lx + lw / 2}" y="${ly + 24}" text-anchor="middle">${mid}℃</text><text x="${lx + lw}" y="${ly + 24}" text-anchor="end">${mid + 14}℃ 이상</text>`;
+  return el("div", { class: "wx-scroll" }, svgBox(W, H, g));
+}
+
+function anomalyChart(rec, byYm) {
+  const rows = rec.map(m => ({ ym: m.ym, t: m.t, p: byYm[ymAdd(m.ym, -12)] })).filter(x => x.p).map(x => ({ ...x, d: +(x.t - x.p.t).toFixed(1) }));
+  if (!rows.length) return el("div", { class: "empty small" }, "전년 같은 달 기온이 없어 비교할 수 없습니다.");
+  const W = 520, H = 200, L = 34, T = 12, B = 24, R = 8, lim = Math.max(1, ...rows.map(x => Math.abs(x.d))) * 1.15;
+  const y = v => T + (H - T - B) * (1 - (v + lim) / (2 * lim)), bw = (W - L - R) / rows.length;
+  let g = `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line-strong)"/><text x="${L - 6}" y="${y(lim) + 8}" text-anchor="end">+${lim.toFixed(0)}</text><text x="${L - 6}" y="${y(-lim)}" text-anchor="end">-${lim.toFixed(0)}</text><text x="${L - 6}" y="${y(0) + 4}" text-anchor="end">0</text>`;
+  rows.forEach((x, i) => {
+    const bx = L + i * bw + bw * 0.18, w = bw * 0.64, y0 = y(0), y1 = y(x.d);
+    g += `<rect x="${bx}" y="${Math.min(y0, y1)}" width="${w}" height="${Math.max(2, Math.abs(y1 - y0))}" rx="3" fill="${x.d >= 0 ? "rgb(" + WWARM + ")" : "rgb(" + WCOOL + ")"}"><title>${x.ym} ${x.t}℃ (전년 ${x.p.t}℃, ${x.d >= 0 ? "+" : ""}${x.d}℃)</title></rect>`;
+    if (i % 2 === 0 || rows.length <= 6) g += `<text x="${bx + w / 2}" y="${H - 6}" text-anchor="middle">${ymLabel(x.ym)}</text>`;
+  });
+  const big = rows.reduce((a, b) => (Math.abs(b.d) > Math.abs(a.d) ? b : a));
+  g += `<text x="${L + rows.indexOf(big) * bw + bw / 2}" y="${big.d >= 0 ? y(big.d) - 5 : y(big.d) + 13}" text-anchor="middle" style="font-weight:600;fill:var(--ink)">${big.d >= 0 ? "+" : ""}${big.d}℃</text>`;
+  return svgBox(W, H, g);
+}
+
+function scatterChart(M, r, mid) {
+  const pts = M.filter(m => m.kwh > 0);
+  if (pts.length < 3) return el("div", { class: "empty small" }, "전기 사용량 자료가 부족합니다.");
+  const W = 520, H = 200, L = 50, T = 12, B = 26, R = 10;
+  const tx = pts.map(p => p.t), ky = pts.map(p => p.kwh);
+  const x0 = Math.floor(Math.min(...tx) - 1), x1 = Math.ceil(Math.max(...tx) + 1), y0 = Math.min(...ky) * 0.9, y1 = Math.max(...ky) * 1.05;
+  const x = v => L + (W - L - R) * (v - x0) / (x1 - x0), y = v => T + (H - T - B) * (1 - (v - y0) / (y1 - y0));
+  let g = `<line x1="${x(mid)}" x2="${x(mid)}" y1="${T}" y2="${H - B}" stroke="var(--line-strong)" stroke-dasharray="3 3"/><text x="${x(mid) + 4}" y="${T + 10}">${mid}℃</text>`;
+  g += `<text x="${L}" y="${H - 6}">${x0}℃</text><text x="${W - R}" y="${H - 6}" text-anchor="end">${x1}℃</text><text x="${L - 6}" y="${y(y1) + 8}" text-anchor="end">${Math.round(y1 / 1000)}</text><text x="${L - 6}" y="${y(y0)}" text-anchor="end">${Math.round(y0 / 1000)}</text><text x="${L - 6}" y="${T + 26}" text-anchor="end" style="font-size:10px">MWh</text>`;
+  pts.forEach(p => {
+    const recent = r.recent.includes(p.ym);
+    g += `<circle cx="${x(p.t)}" cy="${y(p.kwh)}" r="5.5" fill="${recent ? "var(--accent-strong)" : "#a9a39b"}" stroke="#fff" stroke-width="2"><title>${p.ym} · ${p.t}℃ · ${num(p.kwh)} kWh${p.api ? " (기상청)" : ""}</title></circle>`;
+  });
+  const s = svgBox(W, H, g);
+  return el("div", {}, s, el("div", { class: "small muted wx-legend" },
+    el("span", {}, el("i", { style: { background: "var(--accent-strong)" } }), "최근 12개월"), el("span", {}, el("i", { style: { background: "#a9a39b" } }), "그 전")));
 }

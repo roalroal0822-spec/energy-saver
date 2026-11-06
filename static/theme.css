@@ -260,3 +260,16 @@ header.top.hero.kh .kh-visual h1 em { display: block; }
 .kh-visual > .ht-sun { right: max(24px, calc((100vw - 1260px) / 2)); width: 340px; height: 282px;
   -webkit-mask-image: radial-gradient(ellipse at 66% 40%, #000 35%, transparent 80%); mask-image: radial-gradient(ellipse at 66% 40%, #000 35%, transparent 80%); }
 @media (max-width: 900px) { body.on-home .kh-visual { padding-right: 16px; } .kh-visual > .ht-sun { opacity: .35; } }
+
+/* 기상 분석 */
+.wx-scroll { overflow-x: auto; }
+.wx-scroll svg { min-width: 760px; }
+svg.chart.wx text { font-size: 11px; fill: var(--muted); }
+svg.chart.wx rect:hover, svg.chart.wx circle:hover { stroke: var(--ink); stroke-width: 1.5; }
+.wx-legend { display: flex; gap: 14px; margin-top: 6px; }
+.wx-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+/* 관리자 모드: 작업 기록·서비스 구조·검증은 관리자 모드에서만 */
+body:not(.admin) .admin-only { display: none !important; }
+.admin-link { border: 0; background: none; color: var(--faint); font-size: 12px; text-decoration: underline; cursor: pointer; padding: 0 4px; }
+#wx .stat b { font-size: 28px; }

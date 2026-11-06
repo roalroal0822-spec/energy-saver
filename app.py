@@ -165,6 +165,30 @@ def kma_status(req):
     return STATE.get("kma") or {}
 
 
+@app.get("/api/weather")
+def weather(req):
+    """달별 기온·도일과 전체 시설 사용량(기상 분석 도표용). 일별 기온은 기상청에서 받은 달만 있다."""
+    a = an()
+    use = {}
+    for (fac, kind), rows in a.series.items():
+        for r in rows:
+            u = use.setdefault(r["ym"], {"kwh": 0, "m3": 0})
+            u["kwh" if kind == "elec" else "m3"] += r["actual"] or 0
+    out = []
+    for ym in a.months:
+        w = a.ds.weather.get(ym)
+        if not w:
+            continue
+        dd = a.dd(ym)
+        out.append({"ym": ym, "t": w["t"], "api": bool(w.get("from_api")), "full": bool(w.get("full")),
+                    "days": w.get("days") or {}, "cdd": round(dd[0], 1), "hdd": round(dd[1], 1),
+                    "kwh": round(use.get(ym, {}).get("kwh", 0)), "m3": round(use.get(ym, {}).get("m3", 0)),
+                    "src": w.get("src")})
+    e = cfg["energy"]
+    return {"months": out, "kma": STATE.get("kma") or {}, "cdd_base": e["cdd_base"], "hdd_base": e["hdd_base"],
+            "recent": a.recent, "baseline": a.baseline}
+
+
 @app.post("/api/kma")
 def kma_set(req):
     b = req.json or {}
@@ -408,6 +432,27 @@ def request_doc(req):
     return file_response(data, f"점검요청_{f['fac'] or '전체'}_{f['id']}.{fmt}", ctype)
 
 
+def _report_summary(a, ov):
+    t = ov["totals"]
+    lv = [f["level"] for f in a.findings]
+    out = [f"최근 12개월({ov['recent'][0]}~{ov['recent'][1]}) 전기 {t['kwh']:,}kWh, 전기·가스 요금 {t['cost']:,}원, 전기 온실가스 {t['co2_t']:,}tCO2eq",
+           f"점검 기준에 걸린 항목 **{t['findings']}건**(조치 필요 {lv.count('bad')}건, 검토 {lv.count('warn')}건), 찾은 금액 **{t['amount']:,}원**(추정)"]
+    tg = ov.get("target")
+    if tg:
+        out.append(f"감축 목표 {tg['target_pct']:g}% 대비 기온 보정 변화 {_pct(tg['change_pct'])}, 목표까지 {tg['gap_kwh']:,}kWh")
+    try:
+        cur = budget.Budget(a, cfg).current()
+        st = [i["state"] for i in cur["items"]]
+        if st:
+            out.append(f"{cur['fy']}년 공공요금 예산: 부족 예상 {st.count('부족 예상')}개 과목, 불용 예상 {st.count('불용 예상')}개 과목(집행률 {cur['totals']['exec_pct']}%)")
+    except Exception:
+        pass
+    k = STATE.get("kma") or {}
+    if k.get("on") and k.get("months"):
+        out.append(f"기온: 기상청 지상관측(ASOS) 일자료(지점 {k['stn']}, {k['months']}개월)로 날마다 도일을 계산해 보정")
+    return out
+
+
 @app.post("/api/report")
 def report(req):
     a = an()
@@ -416,6 +461,7 @@ def report(req):
     t = ov["totals"]
     blocks = [("title", f"에너지 사용 점검 보고서 ({ov['recent'][0]}~{ov['recent'][1]})"),
               ("p", f"작성일 {date.today().isoformat()} · 기준선 {ov['baseline'][0]}~{ov['baseline'][1]}(기온 보정) · 작성: 에너지 절감 비서({s['mode']})"),
+              ("summary", _report_summary(a, ov)),
               ("h1", "1. 총평"), ("p", s["text"]),
               ("h1", "2. 시설별 현황(최근 12개월)"),
               ("table", ["시설", "전기(kWh)", "전년 대비", "기온 보정 후", "면적당(kWh/㎡)", "전기·가스 요금(원)", "점검 결과"],
@@ -476,6 +522,13 @@ def budget_report(req):
     cur, nm, ny = b["current"], b["next_month"], b["next_year"]
     blocks = [("title", f"{cur['fy']}년 공공요금 예산 집행 관리 및 {ny['fy']}년도 편성 근거(안)"),
               ("p", f"작성일 {date.today().isoformat()} · 자료 기준 {cur['latest']}(고지 기준) · 작성: 한톨(에너지 절감 비서), 규칙·계산 기반")]
+    if cur["items"]:
+        tt, st = cur["totals"], [i["state"] for i in cur["items"]]
+        sm = [f"예산현액 {_won(tt['current'])}원 중 {_won(tt['spent'])}원 집행(집행률 {tt['exec_pct']}%, 경과율 {cur['elapsed_pct']}%), 연말 예상 잔액 {_won(tt['remain'])}원",
+              f"부족 예상 **{st.count('부족 예상')}개 과목**, 불용 예상 **{st.count('불용 예상')}개 과목**" + (f", 전용 검토 {len(cur['moves'])}건" if cur["moves"] else "")]
+        if ny and ny.get("totals"):
+            sm.append(f"{ny['fy']}년 요구액 {_won(ny['totals']['request'])}원" + (f"(올해 대비 {ny['totals']['change_pct']:+.1f}%)" if ny["totals"].get("change_pct") is not None else ""))
+        blocks.append(("summary", sm))
     if cur["items"]:
         t = cur["totals"]
         blocks += [("h1", f"1. {cur['fy']}년 예산 집행 현황"),
