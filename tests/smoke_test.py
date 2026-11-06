@@ -233,6 +233,10 @@ def kepco_checks(c, fk):
     n = len(fk.seen)
     c.call("GET", "/api/kepco")
     yield "받은 달은 다시 묻지 않음", len(fk.seen) == n
+    ins = c.call("GET", "/api/insight")
+    gi = next((x for x in ins["rows"] if x["fac"] == "종합체육센터"), {})
+    yield f"외부 자료 종합 해석: 한전·오피넷 반영, 체육센터 판정 '{gi.get('verdict')}'", ins["src"]["kepco"] and ins["src"]["opinet"] \
+        and gi.get("region_yoy") == 3.0 and gi.get("verdict") and len(ins["rows"]) == 5 and "오피넷" in "".join(ins["facts"])
 
 
 def _sheets(data):
@@ -390,6 +394,8 @@ def ai_checks(c, fl):
     yield "보고서 문단 AI 다듬기(숫자 유지)", "모델" in po["mode"] and "12,345" in po["text"]
     co = c.call("POST", "/api/report/conclusion")
     yield f"AI 결론 및 건의 {len(co['lines'])}개 항목", "모델" in co["mode"] and len(co["lines"]) == 3 and not co["lines"][0].startswith("-")
+    ia = c.call("POST", "/api/insight/ai")
+    yield "AI 외부 자료 종합 해석(사실 대조 통과)", "모델" in ia["mode"] and c.call("GET", "/api/insight")["ai"]["text"] == ia["text"]
     sm = c.call("POST", "/api/summary")
     yield "AI 총평(사실 대조 통과)", "모델" in sm["mode"]
 

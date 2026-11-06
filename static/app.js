@@ -1092,7 +1092,42 @@ async function renderRecommend(box) {
       el("div", { class: "stat" }, el("b", {}, r.totals.target_gap_kwh != null ? num(r.totals.target_gap_kwh) : "-"), el("span", { class: "lbl" }, "감축 목표까지 남은 전기(kWh)"))),
     aiBox, aiMode,
     el("div", { class: "rec-list" }, ...r.items.map(card)),
-    el("p", { class: "small muted" }, r.note)));
+    el("p", { class: "small muted" }, r.note)),
+    el("div", { id: "insight" }));
+  renderInsight();
+}
+
+// ---------------------------------------------------------------- 외부 자료 종합 해석(기상청·한전·오피넷)
+const INS_LV = { bad: "bad", warn: "warn", ok: "ok", gray: "gray" };
+async function renderInsight() {
+  const box = $("#insight");
+  if (!box) return;
+  box.replaceChildren(el("div", { class: "panel" }, el("span", { class: "spinner" }), " 외부 자료와 견주는 중"));
+  let r;
+  try { r = await api("GET", "/api/insight"); } catch (e) { box.replaceChildren(); return; }
+  const aiBox = el("div", { class: "ans", style: { marginTop: "12px", whiteSpace: "pre-line" } }, r.ai ? r.ai.text : r.rule);
+  const aiMode = el("div", { class: "small muted" }, r.ai ? r.ai.mode + (r.ai.dropped ? " · " + r.ai.dropped : "") : "규칙 기반");
+  const aiBtn = el("button", { class: "primary", onclick: async () => {
+    busy(aiBtn, true, "종합 해석 쓰는 중");
+    try { const x = await api("POST", "/api/insight/ai"); aiBox.textContent = x.text; aiMode.textContent = x.mode + (x.dropped ? " · " + x.dropped : ""); }
+    finally { busy(aiBtn, false); }
+  } }, S.llm ? "AI 종합 해석 쓰기" : "종합 해석(규칙)");
+  const srcChip = (on, name) => el("span", { class: "tag " + (on ? "ok" : "gray") }, name + (on ? " 반영" : " 없음"));
+  const p = v => v == null ? "-" : (v > 0 ? "+" : "") + v.toFixed(1) + "%";
+  const w = r.weather;
+  box.replaceChildren(el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "외부 자료 종합 해석"), aiBtn),
+    el("p", { class: "small muted" }, "우리 시설 사용량 변화를 날씨(기상청), 지역 추세(한전 개방포털), 연료 가격(오피넷)과 견줘 날씨 탓인지, 지역 공통인지, 우리 시설 요인인지 나눕니다. 판정은 계산 규칙으로 하고, AI는 그 결과로 우선순위와 이유를 씁니다."),
+    el("div", { class: "row", style: { gap: "6px", flexWrap: "wrap" } }, srcChip(r.src.kma, "기상청 기온"), srcChip(r.src.kepco, "한전 지역 통계"), srcChip(r.src.opinet, "오피넷 유가")),
+    aiBox, aiMode,
+    el("div", { class: "tbl-scroll", style: { marginTop: "12px" } }, el("table", { class: "t" },
+      el("tr", {}, ["시설", "전년 대비", "기온 보정 후", "날씨 몫", `지역(${r.region_area || "도봉구"}) 전년 대비`, "판정", "이유"].map(h => el("th", {}, h))),
+      ...r.rows.map(x => el("tr", {}, el("td", {}, x.fac), el("td", {}, p(x.change_pct)), el("td", {}, p(x.norm_pct)), el("td", {}, p(x.weather_pct)),
+        el("td", {}, x.region_yoy == null ? "-" : `${p(x.region_yoy)} ${x.cntr}`), el("td", {}, el("span", { class: "tag " + INS_LV[x.level] }, x.verdict)),
+        el("td", { class: "small" }, x.why))))),
+    el("p", { class: "small muted" }, (w ? `냉방도일 ${w.cdd}(전년 ${w.cdd_prev}) · 난방도일 ${w.hdd}(전년 ${w.hdd_prev}) · 출처 ${w.src}. ` : "")
+      + (r.oil ? `오피넷 ${r.oil.date} 전국 평균 ` + r.oil.items.map(i => `${i.name} ${num(i.price)}원/L`).join(", ") + ". " : "")
+      + `날씨 몫 = 전년 대비 - 기온 보정 후. 기온 보정 후 ${r.th}% 이상 늘고 지역보다 ${r.th}%p 이상 크면 '시설 요인 가능성 큼'으로 봅니다.`)));
 }
 
 // ---------------------------------------------------------------- 한전 지역 비교(전력데이터 개방포털)

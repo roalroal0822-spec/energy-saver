@@ -22,6 +22,7 @@ import budget
 import ingest
 import kepco
 import opinet
+import insight
 import kma
 import qa
 import recommend
@@ -159,7 +160,7 @@ def rebuild():
     apply_budget_input(ds)
     acts = ds.actions + user_actions()
     an = analysis.Analysis(ds, cfg, acts).run()
-    STATE.update(an=an, bills=bills, ds=ds, rec_ai=None)
+    STATE.update(an=an, bills=bills, ds=ds, rec_ai=None, insight_ai=None)
     return an
 
 
@@ -472,6 +473,30 @@ def recommend_ai(req):
     res = qa.guard(llm, "공공기관 시설 에너지 담당자에게 절감 조치 추천을 한국어 4~6문장으로 설명하세요. 효과가 크고 비용이 적은 일부터 순서를 정해 이유를 말하세요.", facts, rule)
     STATE["rec_ai"] = res
     log("절감 조치 추천 설명", res["mode"])
+    return res
+
+
+def _insight(a):
+    d = store.read("opinet.json", {}) if opinet.key() else {}
+    return insight.build(a, kp=kepco_cmp(a)[1], oil=opinet.summary(d) if d else None, kma=STATE.get("kma"))
+
+
+@app.get("/api/insight")
+def get_insight(req):
+    r = _insight(an())
+    r["ai"] = STATE.get("insight_ai")
+    return r
+
+
+@app.post("/api/insight/ai")
+def insight_ai(req):
+    """외부 자료 종합 해석 문장. 판정은 규칙이 하고, 모델은 사실 목록 안에서 우선순위와 이유를 쓴다."""
+    r = _insight(an())
+    res = qa.guard(llm, "공공기관 시설 에너지 담당자에게 외부 자료(기상청 기온, 한전 지역 통계, 오피넷 유가)와 우리 시설 사용량을 견준 '종합 해석'을 "
+                        "한국어 공문체(~함, ~임) 4~6문장으로 쓰세요. 시설마다 날씨 탓인지, 지역 공통 추세인지, 시설 요인인지 판정을 그대로 따르고, "
+                        "먼저 조치할 곳과 이유, 확인할 일을 말하세요. 원인은 단정하지 말고 확인할 가설로 쓰세요.", r["facts"], r["rule"], max_tokens=900)
+    STATE["insight_ai"] = res
+    log("외부 자료 종합 해석", res["mode"])
     return res
 
 
