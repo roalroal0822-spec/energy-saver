@@ -267,13 +267,14 @@ def guard(llm, system, facts, rule, user=None, extra="", history=None, max_token
 
 
 RX_FOLLOW = re.compile(r"^\s*(그럼|그러면|그리고|그건|그거|거기|그곳|그 시설|그 달|그달|그때|작년|전년|가스는|전기는|왜\??$)")
+RX_ELLIPSIS = re.compile(r"(면|때는?|경우는?|[은는]|이라면|라면|얼마야|얼마예요|어때|어때요)\s*\??\s*$")   # "가스는?", "작년은?"처럼 말이 끊긴 짧은 질문
 
 
 def carry(an, q, history):
     """이어 묻는 질문('그럼 가스는?', '작년은?')이면 앞 질문의 시설·달을 붙인다. (새 질문, 붙인 말)"""
     if not history:
         return q, ""
-    short = len(q.replace(" ", "")) <= 10
+    short = len(q.replace(" ", "")) <= 10 and RX_ELLIPSIS.search(q)
     if not (RX_FOLLOW.search(q) or short):
         return q, ""
     add = []

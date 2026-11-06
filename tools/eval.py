@@ -368,6 +368,7 @@ class FakeLLM:
 
 
 def eval_fabrication(n=200):
+    qa.RATE_MAX = 10**9  # 공개 시연판용 1분 호출 제한은 가짜 모델 시험에는 끈다(제한에 걸리면 대조 자체를 안 하므로)
     an = sample_analysis()
     rnd = random.Random(11)
     qs = [q for q, _ in QUESTIONS]
