@@ -191,8 +191,7 @@ def kepco_checks(c, fk):
     c.call("POST", "/api/sample", {"with_bills": True})
     k = c.call("GET", "/api/kepco")
     cmp_ = k["cmp"] or {}
-    yield f"한전 지역 비교: 키(주소째 넣어도)·도봉구 코드 찾기·{cmp_.get('months')}개월 받기", k["info"]["key"] and not k["info"]["error"] and cmp_.get("range", [None, None])[1] == "2026-07" \
-        and any(q.get("cityCd") == "320" for _, q in fk.seen)
+    yield f"한전 지역 비교: 키(주소째 넣어도)·서울 전체에서 도봉구 고르기·{cmp_.get('months')}개월 받기", k["info"]["key"] and not k["info"]["error"] and cmp_.get("range", [None, None])[1] == "2026-07"
     gym = next((f for f in cmp_.get("facilities", []) if f["fac"] == "종합체육센터"), None)
     yield "시설 단가를 지역 같은 계약종별 평균과 비교", gym and gym["cntr"] == "일반용" and gym["region_unit"] == 120.0 and gym["unit_gap_pct"] > 10
     yield "전년 대비 증감을 지역 추세(+3.0%)와 비교", gym and gym["region_yoy"] == 3.0 and gym["our_yoy"] is not None
@@ -244,7 +243,7 @@ def fake_kepco():
                     self.end_headers()
                     self.wfile.write(b)
                     return
-                body = {"data": [] if q.get("cityCd") != "320" else [
+                body = {"data": [] if "cityCd" in q else [
                     {"year": q["year"], "month": q["month"], "metro": "서울특별시", "city": "도봉구", "cntr": c, "custCnt": n,
                      "powerUsage": round(kwh * grow), "bill": round(kwh * grow * unit), "unitCost": unit, "cntrPwr": 1000}
                     for c, n, kwh, unit in (("일반용", 9000, 40000000, 120.0), ("교육용", 150, 6000000, 110.0), ("주택용", 140000, 33000000, 130.0))]}

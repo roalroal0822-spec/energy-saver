@@ -101,17 +101,15 @@ def collect(months, cache):
     if not key():
         return {}, "한전 전력데이터 개방포털 키(KEPCO_API_KEY)가 없습니다"
     mc = cache.setdefault("months", {})
-    if cache.get("region") != f"{METRO}/{CITY}":
+    if cache.get("region") != f"v2/{METRO}/{CITY}":
         mc.clear()
         cache.pop("city", None)
-        cache["region"] = f"{METRO}/{CITY}"
+        cache["region"] = f"v2/{METRO}/{CITY}"
     today = date.today().strftime("%Y-%m")
     err = ""
     try:
-        try:
-            cc, by_name = city_code(cache), None
-        except Exception:  # 공통코드를 못 받으면 시도 전체를 받아 시군구 이름으로 고른다
-            cc, by_name = None, (CITY if CITY and not CITY.isdigit() else None)
+        # 계약종별 사용량은 법정동 코드 체계라 공통코드(cityCd) 값이 맞지 않는다. 시도 전체를 받아 시군구 이름으로 고른다.
+        cc, by_name = (CITY, None) if CITY.isdigit() else (None, CITY or None)
         todo = [ym for ym in months if ym < today and not (mc.get(ym) and (mc[ym].get("rows") or time.time() - mc[ym].get("at", 0) < RETRY_EMPTY))]
 
         def one(ym):
