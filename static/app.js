@@ -12,7 +12,7 @@ async function load(data) {
   renderHome(); renderFind(); renderFacSel(); renderAct(); renderReport(); renderData();
   BUD = null;
   if (!$("#tab-budget").hidden) renderBudget();
-  if (!$("#tab-fac").hidden) renderWeather();
+  if (!$("#tab-fac").hidden) { renderWeather(); renderKepco(); }
 }
 
 function basisChip(b) {
@@ -844,7 +844,11 @@ async function renderKepco() {
   const box = $("#kepco");
   if (!box) return;
   let r;
-  try { r = await api("GET", "/api/kepco"); } catch (e) { box.replaceChildren(); return; }
+  if (!box.firstChild) box.replaceChildren(el("div", { class: "panel" }, el("h2", {}, "한전 지역 비교"), el("div", { class: "empty small" }, "한전 전력데이터 개방포털에서 자료를 받는 중입니다(처음에는 30초쯤 걸릴 수 있음)…")));
+  try { r = await api("GET", "/api/kepco"); } catch (e) {
+    box.replaceChildren(el("div", { class: "panel" }, el("h2", {}, "한전 지역 비교"), el("div", { class: "small", style: { color: "var(--warn)" } }, "한전 자료를 불러오지 못했습니다: " + (e.message || e))));
+    return;
+  }
   const i = r.info, c = r.cmp;
   const head = el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "한전 지역 비교"),
     i.key ? el("button", { class: "small", onclick: async ev => { busy(ev.target, true, "받는 중"); try { await api("POST", "/api/kepco"); } finally { renderKepco(); } } }, "다시 받기") : null);

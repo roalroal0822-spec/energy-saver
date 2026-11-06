@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from kma import _clean
@@ -107,17 +108,17 @@ def collect(months, cache):
             cc, by_name = city_code(cache), None
         except Exception:  # 공통코드를 못 받으면 시도 전체를 받아 시군구 이름으로 고른다
             cc, by_name = None, (CITY if CITY and not CITY.isdigit() else None)
-        for ym in months:
-            if ym >= today:
-                continue
-            got = mc.get(ym)
-            if got and (got.get("rows") or time.time() - got.get("at", 0) < RETRY_EMPTY):
-                continue
+        todo = [ym for ym in months if ym < today and not (mc.get(ym) and (mc[ym].get("rows") or time.time() - mc[ym].get("at", 0) < RETRY_EMPTY))]
+
+        def one(ym):
             q = {"year": ym[:4], "month": ym[5:], "metroCd": METRO}
             if cc:
                 q["cityCd"] = cc
-            rows = parse_contract(_get("powerUsage/contractType.do", **q), by_name)
-            mc[ym] = {"rows": rows, "at": time.time()}
+            return ym, parse_contract(_get("powerUsage/contractType.do", **q), by_name)
+
+        with ThreadPoolExecutor(max_workers=6) as ex:  # 처음 받을 때 수십 달을 차례로 받으면 화면이 오래 빈다
+            for ym, rows in ex.map(one, todo):
+                mc[ym] = {"rows": rows, "at": time.time()}
     except Exception as e:  # 키 오류·승인 전·연결 실패
         err = f"한전 자료를 받지 못했습니다({str(e)[:100]})"
     return {ym: mc[ym]["rows"] for ym in months if mc.get(ym, {}).get("rows")}, err
