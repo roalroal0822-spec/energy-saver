@@ -16,8 +16,15 @@ services:
         value: 0.0.0.0
       - key: PUBLIC_DEMO
         value: "1"
+      # AI 모델: 업스테이지 솔라(OpenAI 호환). 키는 Render 화면 Environment에서 직접 넣습니다.
       - key: LLM_PROVIDER
-        value: none
+        value: openai
+      - key: LLM_BASE_URL
+        value: https://api.upstage.ai/v1
+      - key: LLM_MODEL
+        value: solar-pro4
+      - key: LLM_API_KEY
+        sync: false
       - key: APP_DATA_DIR
         value: /tmp/app-data
       # 기온 자동 수집(선택). 값은 Render 화면 Environment에서 직접 넣습니다.
