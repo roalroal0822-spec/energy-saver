@@ -200,6 +200,12 @@ def kepco_checks(c, fk):
     rc = c.call("GET", "/api/recommend")
     ext = [x for x in rc["items"] if x.get("ext")]
     yield f"절감 조치 추천에 한전 지역 통계 근거 {len(ext)}건", any(x["key"] == "요금구조" for x in ext)
+    import json as _j
+    sys.path.insert(0, str(ROOT))
+    import kepco
+    real = kepco.parse_contract(_j.loads((ROOT / "tests/fixtures/kepco_contract_sample.json").read_text(encoding="utf-8")), "도봉구")
+    yield "실제 한전 응답 형식(숫자가 글자, '5호미만제거' 행) 읽기 · 도봉구 일반용 175.4원/kWh", \
+        set(real) == {"교육용", "심 야", "일반용", "주택용"} and real["일반용"]["unit"] == 175.4 and real["일반용"]["cust"] == 12888
     n = len(fk.seen)
     c.call("GET", "/api/kepco")
     yield "받은 달은 다시 묻지 않음", len(fk.seen) == n
