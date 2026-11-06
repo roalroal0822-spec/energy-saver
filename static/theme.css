@@ -307,3 +307,5 @@ body:not(.admin) .admin-only { display: none !important; }
 .rec-save { text-align: right; min-width: 120px; }
 .rec-save b { display: block; font-size: 20px; color: var(--accent-strong); }
 .chip.ext { background: #eef1f6; border-color: #d5dbe5; color: #3d4b61; }
+.per-bar .row { gap: 8px; flex-wrap: wrap; align-items: center; }
+.per-bar select { min-width: 110px; }

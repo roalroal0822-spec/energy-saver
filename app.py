@@ -176,7 +176,7 @@ def an():
 def get_state(req):
     a = an()
     cur = budget.Budget(a, cfg).current()
-    return {"overview": a.overview(), "findings": a.findings, "effects": a.effects(),
+    return {"overview": a.overview(), "findings": a.findings, "effects": a.effects(), "months": a.months, "recent": a.recent,
             "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled, "kma": STATE.get("kma"),
             "budget": {"fy": cur["fy"], "totals": cur.get("totals"), "items": [{k: i[k] for k in ("fac", "item", "state", "remain", "run_out")} for i in cur["items"]]} if cur else None}
 
@@ -399,7 +399,7 @@ def summary(req):
 
 # ------------------------------------------------------------ 조치
 
-def kepco_cmp(a):
+def kepco_cmp(a, rng=None):
     """한전 전력데이터 개방포털 지역 비교(키가 있을 때만). 실패 뒤 10분은 받아 둔 값만 쓴다."""
     info = {"key": bool(kepco.key()), "metro": kepco.METRO, "city": kepco.CITY, "src": kepco.SRC, "error": ""}
     if not info["key"]:
@@ -428,12 +428,14 @@ def kepco_cmp(a):
     for (fac, ym), d in sorted(a.ds.elec.items(), key=lambda x: x[0][1]):
         if d.get("tariff"):
             tariffs[fac] = d["tariff"]
-    return info, kepco.compare(a, region, tariffs), solar
+    return info, kepco.compare(a, region, tariffs, rng), solar
 
 
 @app.get("/api/kepco")
 def get_kepco(req):
-    info, cmp, solar = kepco_cmp(an())
+    q = req.query
+    rng = (q.get("from"), q.get("to")) if q.get("from") and q.get("to") else None
+    info, cmp, solar = kepco_cmp(an(), rng)
     return {"info": info, "cmp": cmp, "solar": solar}
 
 

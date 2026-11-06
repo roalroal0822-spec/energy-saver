@@ -75,8 +75,13 @@
   <section class="tab" id="tab-find" hidden></section>
   <section class="tab" id="tab-budget" hidden></section>
   <section class="tab" id="tab-fac" hidden>
+    <div class="panel per-bar"><div class="row">
+      <h2 style="flex:1;margin:0">분석 기간</h2>
+      <select id="per-from" aria-label="시작 연월"></select><span class="muted">~</span><select id="per-to" aria-label="끝 연월"></select>
+      <button class="small" id="per-12">최근 12개월</button><button class="small" id="per-all">전체</button></div>
+      <p class="small muted" id="per-note"></p></div>
     <div id="wx"></div>
-      <div id="kepco"></div>
+    <div id="kepco"></div>
     <div class="panel">
       <div class="row"><h2 style="flex:1;margin:0">시설별 분석</h2>
         <select id="fac-sel"></select>

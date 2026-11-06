@@ -195,6 +195,9 @@ def kepco_checks(c, fk):
     gym = next((f for f in cmp_.get("facilities", []) if f["fac"] == "종합체육센터"), None)
     yield "시설 단가를 지역 같은 계약종별 평균과 비교", gym and gym["cntr"] == "일반용" and gym["region_unit"] == 120.0 and gym["unit_gap_pct"] > 10
     yield "전년 대비 증감을 지역 추세(+3.0%)와 비교", gym and gym["region_yoy"] == 3.0 and gym["our_yoy"] is not None
+    kr = c.call("GET", "/api/kepco?from=2025-01&to=2025-06")["cmp"]
+    g2 = next(f for f in kr["facilities"] if f["fac"] == "종합체육센터")
+    yield "분석 기간(2025-01~06)을 고르면 한전 비교도 그 기간으로", kr["range"] == ["2025-01", "2025-06"] and g2["from"] == "2025-01" and g2["to"] == "2025-06" and g2["months"] == 6
     yield "태양광 계약현황(도봉구 21개)", (k["solar"] or {}).get("cnt") == 21
     rc = c.call("GET", "/api/recommend")
     ext = [x for x in rc["items"] if x.get("ext")]

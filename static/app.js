@@ -9,7 +9,7 @@ const LV = { bad: "조치 필요", warn: "검토", gray: "설정 확인" };
 
 async function load(data) {
   S = data || await api("GET", "/api/state");
-  renderHome(); renderFind(); renderFacSel(); renderAct(); renderReport(); renderData();
+  renderHome(); renderFind(); renderFacSel(); renderPeriod(); renderAct(); renderReport(); renderData();
   BUD = null;
   if (!$("#tab-budget").hidden) renderBudget();
   if (!$("#tab-fac").hidden) { renderWeather(); renderKepco(); }
@@ -186,7 +186,8 @@ async function renderFac() {
   catch (e) { $("#fac-chart").replaceChildren(el("div", { class: "empty" }, "이 시설은 해당 에너지 자료가 없습니다.")); $("#fac-detail").innerHTML = ""; return; }
   const unit = kind === "gas" ? "㎥" : "kWh";
   const hitMonths = new Set(S.findings.filter(f => f.fac === fac && f.kind === kind && ["excess", "gas_excess", "closure"].includes(f.type)).flatMap(f => f.months));
-  const rows = r.rows;
+  const rows = r.rows.filter(x => inPer(x.ym));
+  if (!rows.length) { $("#fac-chart").replaceChildren(el("div", { class: "empty" }, "선택한 기간에 이 시설 자료가 없습니다.")); $("#fac-detail").innerHTML = ""; return; }
   const W = 1100, H = 300, L = 64, B = 34, T = 14;
   const raw = Math.max(...rows.map(x => Math.max(x.actual, x.expected || 0))) * 1.05;
   const mag = Math.pow(10, Math.floor(Math.log10(raw / 4)));
@@ -424,6 +425,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupAdmin();
   GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); renderKepco(); } });
   $("#fac-sel").addEventListener("change", renderFac);
+  setupPeriod();
   $("#kind-sel").addEventListener("change", renderFac);
   $("#ask-btn").addEventListener("click", () => ask());
   $("#q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
@@ -613,6 +615,36 @@ function svgBox(W, H, inner) {
 }
 const ymAdd = (ym, n) => { const d = new Date(+ym.slice(0, 4), +ym.slice(5) - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 
+// ---------------------------------------------------------------- 분석 기간(시설별 분석 탭 전체에 적용)
+let PER = null;
+const inPer = ym => !PER || (ym >= PER.from && ym <= PER.to);
+function renderPeriod() {
+  const ms = S.months || [];
+  const f = $("#per-from"), t = $("#per-to");
+  if (!f || !ms.length) return;
+  if (!PER || !ms.includes(PER.from) || !ms.includes(PER.to)) {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("hantol:period") || "null"); } catch (e) { /* 저장 안 됨 */ }
+    PER = saved && ms.includes(saved.from) && ms.includes(saved.to) && saved.from <= saved.to ? saved : { from: ms[0], to: ms[ms.length - 1] };
+  }
+  const opts = sel => ms.map(m => el("option", { value: m, selected: m === sel }, ymLabel(m)));
+  f.replaceChildren(...opts(PER.from)); t.replaceChildren(...opts(PER.to));
+  const n = ms.filter(inPer).length;
+  $("#per-note").textContent = `${PER.from} ~ ${PER.to} (${n}개월) · 아래 기상 분석, 한전 지역 비교, 시설별 그래프·표가 이 기간으로 바뀝니다. 기준선(기온 보정 모델)과 점검 결과는 기간과 관계없이 같은 기준으로 계산합니다.`;
+}
+function setPeriod(from, to) {
+  if (from > to) [from, to] = [to, from];
+  PER = { from, to };
+  try { localStorage.setItem("hantol:period", JSON.stringify(PER)); } catch (e) { /* 저장 안 됨 */ }
+  renderPeriod(); renderFac(); renderWeather(); renderKepco();
+}
+function setupPeriod() {
+  $("#per-from").addEventListener("change", e => setPeriod(e.target.value, PER.to));
+  $("#per-to").addEventListener("change", e => setPeriod(PER.from, e.target.value));
+  $("#per-12").addEventListener("click", () => { const r = S.recent && S.recent.length ? S.recent : S.months.slice(-12); setPeriod(r[0], r[r.length - 1]); });
+  $("#per-all").addEventListener("click", () => setPeriod(S.months[0], S.months[S.months.length - 1]));
+}
+
 async function renderWeather() {
   const box = $("#wx");
   if (!box) return;
@@ -620,24 +652,25 @@ async function renderWeather() {
   try { r = await api("GET", "/api/weather"); } catch (e) { box.replaceChildren(); return; }
   const M = r.months;
   if (!M.length) { box.replaceChildren(); return; }
-  const api_ = M.filter(m => m.api), mid = r.cdd_base;
+  const api_ = M.filter(m => m.api && inPer(m.ym)), mid = r.cdd_base;
   const byYm = Object.fromEntries(M.map(m => [m.ym, m]));
-  const rec = M.filter(m => r.recent.includes(m.ym)), base = M.filter(m => r.baseline.includes(m.ym));
+  const rec = M.filter(m => inPer(m.ym));
+  const recP = rec.filter(m => byYm[ymAdd(m.ym, -12)]), base = recP.map(m => byYm[ymAdd(m.ym, -12)]);  // 전년 같은 달이 있는 달끼리만 비교
   const sum = (a, k) => a.reduce((s, m) => s + m[k], 0);
   const chg = (a, b) => (b ? (a - b) / b * 100 : null);
   const avgT = a => a.length ? a.reduce((s, m) => s + m.t, 0) / a.length : null;
   const days = rec.flatMap(m => Object.entries(m.days));
   const hot = days.filter(([, v]) => v >= 25).length, cold = days.filter(([, v]) => v <= 0).length;
   const mx = days.length ? days.reduce((a, b) => (b[1] > a[1] ? b : a)) : null, mn = days.length ? days.reduce((a, b) => (b[1] < a[1] ? b : a)) : null;
-  const tR = avgT(rec), tB = avgT(base);
+  const tR = avgT(rec), tB = base.length === rec.length ? avgT(base) : null;
   const src = api_.length ? `기상청 지상관측(ASOS) 일자료 · 지점 ${r.kma.stn || ""} · ${api_.length}개월` : "넣은 기온 파일(월평균) · 기온 자동 수집을 켜면 일별 분석이 나옵니다";
   const stat = (b, l, color) => el("div", { class: "stat" }, el("b", { style: color ? { color } : {} }, b), el("span", { class: "lbl" }, l));
   const dpct = v => (v == null ? "-" : pct(v));
   const kpis = el("div", { class: "kpis", style: { marginTop: "14px" } },
-    stat(tR == null ? "-" : tR.toFixed(1) + "℃", tB == null ? "최근 12개월 평균기온" : `최근 12개월 평균기온 (전년 ${tB.toFixed(1)}℃)`),
-    stat(dpct(chg(sum(rec, "cdd"), sum(base, "cdd"))), `냉방도일 전년 대비 (${num(sum(rec, "cdd"))})`, chg(sum(rec, "cdd"), sum(base, "cdd")) > 0 ? "var(--bad)" : null),
-    stat(dpct(chg(sum(rec, "hdd"), sum(base, "hdd"))), `난방도일 전년 대비 (${num(sum(rec, "hdd"))})`, chg(sum(rec, "hdd"), sum(base, "hdd")) > 0 ? "var(--bad)" : null),
-    days.length ? stat(`${hot}일 · ${cold}일`, "일평균 25℃ 이상 · 0℃ 이하 (최근 12개월)") : null,
+    stat(tR == null ? "-" : tR.toFixed(1) + "℃", tB == null ? "선택 기간 평균기온" : `선택 기간 평균기온 (전년 같은 달 ${tB.toFixed(1)}℃)`),
+    stat(dpct(chg(sum(recP, "cdd"), sum(base, "cdd"))), `냉방도일 전년 대비 (${num(sum(rec, "cdd"))})`, chg(sum(recP, "cdd"), sum(base, "cdd")) > 0 ? "var(--bad)" : null),
+    stat(dpct(chg(sum(recP, "hdd"), sum(base, "hdd"))), `난방도일 전년 대비 (${num(sum(rec, "hdd"))})`, chg(sum(recP, "hdd"), sum(base, "hdd")) > 0 ? "var(--bad)" : null),
+    days.length ? stat(`${hot}일 · ${cold}일`, "일평균 25℃ 이상 · 0℃ 이하 (선택 기간)") : null,
     mx ? stat(`${mx[1]} · ${mn[1]}℃`, `가장 더운 날(${+mx[0].slice(5, 7)}.${+mx[0].slice(8)}.) · 추운 날(${+mn[0].slice(5, 7)}.${+mn[0].slice(8)}.) 일평균`) : null);
 
   const panels = [];
@@ -646,9 +679,9 @@ async function renderWeather() {
     heatmap(api_, mid)));
   panels.push(el("div", { class: "grid2" },
     el("div", { class: "panel" }, el("h3", {}, "달별 기온, 전년 같은 달과의 차이"),
-      el("p", { class: "small muted" }, "위로 솟으면 전년보다 더웠던 달, 아래로 내려가면 추웠던 달입니다(최근 12개월)."), anomalyChart(rec, byYm)),
+      el("p", { class: "small muted" }, "위로 솟으면 전년보다 더웠던 달, 아래로 내려가면 추웠던 달입니다(선택 기간)."), anomalyChart(rec, byYm)),
     el("div", { class: "panel" }, el("h3", {}, "기온과 전기 사용량"),
-      el("p", { class: "small muted" }, `점 하나가 한 달(전체 시설 합계)입니다. ${mid}℃에서 멀어질수록 냉난방 때문에 사용량이 늘어납니다.`), scatterChart(M, r, mid))));
+      el("p", { class: "small muted" }, `점 하나가 한 달(전체 시설 합계)입니다. ${mid}℃에서 멀어질수록 냉난방 때문에 사용량이 늘어납니다.`), scatterChart(M.filter(m => inPer(m.ym)), r, mid))));
   box.replaceChildren(el("div", { class: "panel" },
     el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "기상 분석"), el("span", { class: "small muted" }, src)), kpis), ...panels);
 }
@@ -845,7 +878,7 @@ async function renderKepco() {
   if (!box) return;
   let r;
   if (!box.firstChild) box.replaceChildren(el("div", { class: "panel" }, el("h2", {}, "한전 지역 비교"), el("div", { class: "empty small" }, "한전 전력데이터 개방포털에서 자료를 받는 중입니다(처음에는 30초쯤 걸릴 수 있음)…")));
-  try { r = await api("GET", "/api/kepco"); } catch (e) {
+  try { r = await api("GET", "/api/kepco" + (PER ? `?from=${PER.from}&to=${PER.to}` : "")); } catch (e) {
     box.replaceChildren(el("div", { class: "panel" }, el("h2", {}, "한전 지역 비교"), el("div", { class: "small", style: { color: "var(--warn)" } }, "한전 자료를 불러오지 못했습니다: " + (e.message || e))));
     return;
   }
@@ -878,7 +911,7 @@ async function renderKepco() {
   box.replaceChildren(el("div", { class: "panel" }, head, lead, err,
     el("div", { class: "small muted", style: { margin: "6px 0 10px" } }, `${c.area} · ${c.range[0]}~${c.range[1]} ${c.months}개월 · 출처 ${i.src}`),
     el("h3", {}, "전년 같은 달 대비 전기 사용 증감: 우리 시설 전체와 " + c.area + " 일반용"),
-    yoyChart(c.monthly.filter(m => m.region_yoy != null && m.our_yoy != null).slice(-12)),
+    yoyChart(c.monthly.filter(m => m.region_yoy != null && m.our_yoy != null)),
     el("h3", { style: { marginTop: "16px" } }, "시설별 단가·증감 비교"),
     el("div", { class: "tbl-scroll" }, tbl),
     el("p", { class: "small muted" }, "단가 = 전기요금 ÷ 사용량(우리는 고지서, 지역은 한전 평균판매단가). 고압·저압과 계약 규모에 따라 단가가 다르므로 차이는 점검 실마리로만 씁니다. * 고지서에 계약종별이 없어 일반용으로 봄."),

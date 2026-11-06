@@ -156,9 +156,10 @@ def _yoy(cur, prev):
     return round((cur / prev - 1) * 100, 1) if cur and prev else None
 
 
-def compare(a, region, tariffs):
+def compare(a, region, tariffs, rng=None):
     """우리 시설(최근 12개월) 전기 단가·전년 대비 증감을 같은 지역·같은 계약종별 평균과 견준다.
-    a: analysis.Analysis, region: collect 결과, tariffs: {시설: 고지서 계약종별}."""
+    a: analysis.Analysis, region: collect 결과, tariffs: {시설: 고지서 계약종별}, rng: (시작 연월, 끝 연월) 없으면 최근 12개월."""
+    inr = (lambda r: rng[0] <= r["ym"] <= rng[1]) if rng else (lambda r: r["recent"])
     if not region:
         return None
     use = {f["name"]: f.get("use") or "" for f in a.overview()["facilities"]}
@@ -168,7 +169,7 @@ def compare(a, region, tariffs):
             continue
         cntr = contract_of(tariffs.get(fac), use.get(fac))
         byym = {r["ym"]: r for r in rows}
-        rec = [r for r in rows if r["recent"] and r["ym"] in region and cntr in region[r["ym"]] and r["actual"]]
+        rec = [r for r in rows if inr(r) and r["ym"] in region and cntr in region[r["ym"]] and r["actual"]]
         for r in rows:
             t = tot.setdefault(r["ym"], 0)
             tot[r["ym"]] = t + (r["actual"] or 0)
@@ -192,14 +193,17 @@ def compare(a, region, tariffs):
                      "yoy_gap": round(oy - ry, 1) if oy is not None and ry is not None else None})
     monthly = []
     for ym in sorted(region):
+        if rng and not rng[0] <= ym <= rng[1]:
+            continue
         p = _ym(ym, -12)
         g, gp = region[ym].get("일반용"), region.get(p, {}).get("일반용")
         monthly.append({"ym": ym, "region_kwh": round(g["kwh"]) if g else None, "region_unit": g["unit"] if g else None,
                         "region_yoy": _yoy(g["kwh"], gp["kwh"]) if g and gp else None,
                         "our_kwh": round(tot.get(ym, 0)), "our_yoy": _yoy(tot.get(ym), tot.get(p))})
-    latest = max(region)
+    shown = [ym for ym in region if not rng or rng[0] <= ym <= rng[1]] or list(region)
+    latest = max(shown)
     area = next((v.get("area") for v in region[latest].values() if v.get("area")), CITY)
-    return {"area": area, "months": len(region), "range": [min(region), latest], "facilities": facs, "monthly": monthly,
+    return {"area": area, "months": len(shown), "range": [min(shown), latest], "rng": list(rng) if rng else None, "facilities": facs, "monthly": monthly,
             "latest": {"ym": latest, "rows": [dict(cntr=c, **{k: (round(v[k]) if k != "unit" else v[k]) for k in ("cust", "kwh", "won", "unit")})
                                                 for c, v in sorted(region[latest].items(), key=lambda x: -x[1]["kwh"])]}}
 
