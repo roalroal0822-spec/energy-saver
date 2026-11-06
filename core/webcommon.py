@@ -27,7 +27,7 @@ def register(app, cfg, llm, app_name, version):
 
     def no_public():
         if cfg.public:
-            raise HttpError(403, "공개 시연판에서는 모델 설정을 바꿀 수 없습니다. 기관 PC에 설치해 쓰세요.")
+            raise HttpError(403, "공개 시연판은 누구나 접속하므로 화면에서 모델 설정을 바꿀 수 없습니다(키 유출 방지). 서버 관리자가 Render Environment의 LLM_PROVIDER·LLM_BASE_URL·LLM_MODEL·LLM_API_KEY로 설정합니다.")
 
     @app.get("/api/llm")
     def get_llm(req):
