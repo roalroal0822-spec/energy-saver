@@ -20,6 +20,7 @@ from core.xlsx import CTYPE as XLSX, workbook
 import analysis
 import budget
 import ingest
+import kepco
 import kma
 import qa
 import recommend
@@ -398,9 +399,60 @@ def summary(req):
 
 # ------------------------------------------------------------ 조치
 
+def kepco_cmp(a):
+    """한전 전력데이터 개방포털 지역 비교(키가 있을 때만). 실패 뒤 10분은 받아 둔 값만 쓴다."""
+    info = {"key": bool(kepco.key()), "metro": kepco.METRO, "city": kepco.CITY, "src": kepco.SRC, "error": ""}
+    if not info["key"]:
+        return info, None, None
+    cache = store.read("kepco_cache.json", {})
+    fail = STATE.get("kepco_fail")
+    if fail and time.time() - fail[0] < 600:
+        region = {ym: v["rows"] for ym, v in cache.get("months", {}).items() if ym in a.months and v.get("rows")}
+        err = fail[1]
+    else:
+        region, err = kepco.collect(list(a.months), cache)
+        store.write("kepco_cache.json", cache)
+        STATE["kepco_fail"] = (time.time(), err) if err else None
+    solar = None
+    if not err:
+        try:
+            for y in (date.today().year - 1, date.today().year - 2):
+                solar = kepco.renew(y, cache)
+                if solar:
+                    break
+            store.write("kepco_cache.json", cache)
+        except Exception as e:
+            info["solar_error"] = f"신재생 계약현황을 받지 못했습니다({str(e)[:80]})"
+    info["error"] = err
+    tariffs = {}
+    for (fac, ym), d in sorted(a.ds.elec.items(), key=lambda x: x[0][1]):
+        if d.get("tariff"):
+            tariffs[fac] = d["tariff"]
+    return info, kepco.compare(a, region, tariffs), solar
+
+
+@app.get("/api/kepco")
+def get_kepco(req):
+    info, cmp, solar = kepco_cmp(an())
+    return {"info": info, "cmp": cmp, "solar": solar}
+
+
+@app.post("/api/kepco")
+def kepco_refresh(req):
+    STATE["kepco_fail"] = None
+    cache = store.read("kepco_cache.json", {})
+    for v in cache.get("months", {}).values():
+        if not v.get("rows"):
+            v["at"] = 0
+    store.write("kepco_cache.json", cache)
+    log("한전 자료", "다시 받기")
+    return get_kepco(req)
+
+
 @app.get("/api/recommend")
 def get_recommend(req):
-    r = recommend.build(an())
+    a = an()
+    r = recommend.build(a, kp=kepco_cmp(a)[1])
     r["ai"] = STATE.get("rec_ai")
     return r
 
@@ -409,7 +461,7 @@ def get_recommend(req):
 def recommend_ai(req):
     """모델이 연결되어 있으면 추천 목록을 바탕으로 우선순위 설명을 쓴다. 사실에 없는 숫자가 있으면 버린다."""
     a = an()
-    r = recommend.build(a)
+    r = recommend.build(a, kp=kepco_cmp(a)[1])
     facts = [f"{x['fac']} - {x['title']}: {x['why']}" + (f" 예상 절감 {x['save_won']:,}원" if x["save_won"] else "")
              + (f" (근거 {x['basis']['reg']} {x['basis']['label']})" if x["basis"] else "") for x in r["items"] if not x["registered"]]
     if not facts:

@@ -187,10 +187,74 @@ def checks(c):
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13
 
 
+def kepco_checks(c, fk):
+    c.call("POST", "/api/sample", {"with_bills": True})
+    k = c.call("GET", "/api/kepco")
+    cmp_ = k["cmp"] or {}
+    yield f"한전 지역 비교: 키(주소째 넣어도)·도봉구 코드 찾기·{cmp_.get('months')}개월 받기", k["info"]["key"] and not k["info"]["error"] and cmp_.get("range", [None, None])[1] == "2026-07" \
+        and any(q.get("cityCd") == "320" for _, q in fk.seen)
+    gym = next((f for f in cmp_.get("facilities", []) if f["fac"] == "종합체육센터"), None)
+    yield "시설 단가를 지역 같은 계약종별 평균과 비교", gym and gym["cntr"] == "일반용" and gym["region_unit"] == 120.0 and gym["unit_gap_pct"] > 10
+    yield "전년 대비 증감을 지역 추세(+3.0%)와 비교", gym and gym["region_yoy"] == 3.0 and gym["our_yoy"] is not None
+    yield "태양광 계약현황(도봉구 21개)", (k["solar"] or {}).get("cnt") == 21
+    rc = c.call("GET", "/api/recommend")
+    ext = [x for x in rc["items"] if x.get("ext")]
+    yield f"절감 조치 추천에 한전 지역 통계 근거 {len(ext)}건", any(x["key"] == "요금구조" for x in ext)
+    n = len(fk.seen)
+    c.call("GET", "/api/kepco")
+    yield "받은 달은 다시 묻지 않음", len(fk.seen) == n
+
+
 def _sheets(data):
     import io
     from openpyxl import load_workbook
     return load_workbook(io.BytesIO(data)).sheetnames
+
+
+def fake_kepco():
+    """한전 전력데이터 개방포털 흉내(포털 API 가이드의 응답 형식). 2026-07까지만 공개된 것처럼 답한다."""
+    import json as _j
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            H.seen.append((u.path, q))
+            if q.get("apiKey") != "kepco-test":
+                body = {"errMsg": "인증키 오류"}
+            elif u.path.endswith("commonCode.do"):
+                body = {"data": [{"uppoCd": "11", "uppoCdNm": "서울특별시", "codeTy": "cityCd", "code": "320", "codeNm": "도봉구"},
+                                 {"uppoCd": "41", "uppoCdNm": "경기도", "codeTy": "cityCd", "code": "999", "codeNm": "도봉구"}]}
+            elif u.path.endswith("contractType.do"):
+                ym = f"{q['year']}-{q['month']}"
+                grow = 1.03 if q["year"] >= "2025" and ym >= "2025-10" else 1.0
+                body = {"data": [] if ym > "2026-07" or q.get("cityCd") != "320" else [
+                    {"year": q["year"], "month": q["month"], "metro": "서울특별시", "city": "도봉구", "cntr": c, "custCnt": n,
+                     "powerUsage": round(kwh * grow), "bill": round(kwh * grow * unit), "unitCost": unit, "cntrPwr": 1000}
+                    for c, n, kwh, unit in (("일반용", 9000, 40000000, 120.0), ("교육용", 150, 6000000, 110.0), ("주택용", 140000, 33000000, 130.0))]}
+            elif u.path.endswith("renewEnergy.do"):
+                body = {"data": [{"genSrc": "태양광", "metro": "서울", "city": "도봉구", "cnt": 21, "capacity": 685.66, "areaCnt": 411, "areaCapacity": 22247.64},
+                                 {"genSrc": "태양광", "metro": "서울", "city": "강남구", "cnt": 18, "capacity": 1563.96, "areaCnt": 411, "areaCapacity": 22247.64}]}
+            else:
+                body = {"errMsg": "없는 주소"}
+            b = _j.dumps(body, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *a):
+            pass
+
+    H.seen = []
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    srv.seen = H.seen
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
 
 
 def fake_kma():
@@ -226,7 +290,9 @@ def main():
     tmp = tempfile.mkdtemp(prefix="smoke-energy-")
     port = free_port()
     fake = fake_kma()
-    env = dict(os.environ, APP_DATA_DIR=tmp, LLM_PROVIDER="none", KMA_APIHUB_KEY="test-key",
+    fk = fake_kepco()
+    env = dict(os.environ, KEPCO_API_KEY="https://bigdata.kepco.co.kr/openapi/v1/commonCode.do?codeTy=metroCd&apiKey=kepco-test",
+               KEPCO_API_URL=f"http://127.0.0.1:{fk.server_port}/openapi/v1", KEPCO_METRO="11", KEPCO_CITY="도봉구", APP_DATA_DIR=tmp, LLM_PROVIDER="none", KMA_APIHUB_KEY="test-key",
                KMA_HUB_URL=f"http://127.0.0.1:{fake.server_port}/kma_sfcdd3.php")
     proc = subprocess.Popen([sys.executable, "run.py", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -240,7 +306,7 @@ def main():
             except Exception:
                 time.sleep(0.3)
         print(f"[에너지 절감 비서] http://127.0.0.1:{port}")
-        for label, ok in checks(c):
+        for label, ok in list(checks(c)) + list(kepco_checks(c, fk)):
             total += 1
             failed += 0 if ok else 1
             print(f"  {'통과' if ok else '실패'}  {label}")

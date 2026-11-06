@@ -20,7 +20,7 @@ def _months_of(f):
     return {int(m[5:]) for m in f.get("months") or []}
 
 
-def build(a, acts=None):
+def build(a, acts=None, kp=None):
     """a: analysis.Analysis(실행 후). 돌려줌: {"items": [...], "totals": {...}}"""
     g = a.g
     eff = a.effects()
@@ -29,8 +29,8 @@ def build(a, acts=None):
     led_eff = next((e for e in eff if e.get("saved_pct") and ("LED" in e.get("title", "") or e.get("kind") == "조명")), None)
     items = []
 
-    def add(fac, key, title, why, save_won, save_kwh, formula, topic, official=None, finding=None, kind="elec", level="warn"):
-        items.append({"fac": fac, "key": key, "title": title, "why": why, "save_won": round(save_won) if save_won else None,
+    def add(fac, key, title, why, save_won, save_kwh, formula, topic, official=None, finding=None, kind="elec", level="warn", ext=None):
+        items.append({"ext": ext, "fac": fac, "key": key, "title": title, "why": why, "save_won": round(save_won) if save_won else None,
                       "save_kwh": round(save_kwh) if save_kwh else None, "formula": formula,
                       "basis": g.cite(g.article(topic)) if topic else None, "official": OFFICIAL.get(official) if official else None,
                       "finding": finding, "kind": kind, "level": level,
@@ -103,6 +103,27 @@ def build(a, acts=None):
                 add(x["name"], "진단", "에너지 진단(설비 운영 실태 점검) 받기",
                     f"같은 용도({use}) 시설 평균보다 면적당 전기 사용량이 {x['kwh_per_m2'] / avg * 100 - 100:.0f}% 많습니다({x['kwh_per_m2']} vs 평균 {avg:.1f} kWh/㎡).",
                     None, None, "", None, None, None, level="gray")
+
+    # 한전 전력데이터 개방포털: 같은 지역·같은 계약종별 평균과 견주기(지역 집계 통계라 참고 근거)
+    if kp:
+        area = kp["area"]
+        for k in kp["facilities"]:
+            ext = {"label": f"한전 전력데이터 개방포털 · 계약종별 전력사용량({area} {k['cntr']}, {k['from']}~{k['to']})"}
+            if k["unit_gap_pct"] is not None and k["unit_gap_pct"] >= 10:
+                add(k["fac"], "요금구조", "요금 구조 점검(계약전력·역률·시간대별 사용)",
+                    f"최근 {k['months']}개월 전기 단가가 {k['our_unit']}원/kWh로 {area} {k['cntr']} 평균 {k['region_unit']}원/kWh보다 {k['unit_gap_pct']}% 높습니다.",
+                    None, None,
+                    f"참고: (우리 단가 {k['our_unit']} - 지역 평균 {k['region_unit']}원/kWh) × {k['kwh']:,}kWh = {k['gap_won']:,}원. 고압·저압과 계약 규모에 따라 단가가 달라 전부 줄일 수 있는 금액은 아닙니다",
+                    "계약전력", None, None, level="gray", ext=ext)
+            if k["yoy_gap"] is not None and k["yoy_gap"] >= 10:
+                note = f" 같은 기간 {area} {k['cntr']} 전체 사용량은 전년보다 {k['region_yoy']:+.1f}%, 이 시설은 {k['our_yoy']:+.1f}%였습니다(한전 지역 통계)."
+                mine = [x for x in items if x["fac"] == k["fac"] and x["key"] in ("냉방", "난방", "조명")]
+                for x in mine:
+                    x["why"] += note
+                    x["ext"] = ext
+                if not mine:
+                    add(k["fac"], "지역추세", "지역 추세보다 많이 늘어난 원인 확인(운영시간·설비 추가)",
+                        note.strip(), None, None, "", None, None, None, level="gray", ext=ext)
 
     order = {"bad": 0, "warn": 1, "gray": 2}
     items.sort(key=lambda x: (x["registered"], order.get(x["level"], 3), -(x["save_won"] or 0)))

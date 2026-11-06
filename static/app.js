@@ -422,7 +422,7 @@ function setupAdmin() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   setupAdmin();
-  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); } });
+  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); renderKepco(); } });
   $("#fac-sel").addEventListener("change", renderFac);
   $("#kind-sel").addEventListener("change", renderFac);
   $("#ask-btn").addEventListener("click", () => ask());
@@ -821,6 +821,7 @@ async function renderRecommend(box) {
       x.basis ? basisChip(x.basis) : null,
       x.official ? el("span", { class: "chip", title: x.official.text + " · " + x.official.note, onclick: () => modal(x.official.name, el("p", {}, x.official.text), el("p", { class: "small muted" }, x.official.note)) },
         x.official.name.split("(")[0] + (x.official.verified ? "" : " · 원문 확인 필요")) : null,
+      x.ext ? el("span", { class: "chip ext" }, x.ext.label) : null,
       el("span", { style: { flex: 1 } }),
       x.registered ? null : el("button", { class: "small", onclick: async () => {
         await api("POST", "/api/actions", { fac: x.fac, title: x.title, kind: x.key, finding: x.finding });
@@ -836,4 +837,66 @@ async function renderRecommend(box) {
     aiBox, aiMode,
     el("div", { class: "rec-list" }, ...r.items.map(card)),
     el("p", { class: "small muted" }, r.note)));
+}
+
+// ---------------------------------------------------------------- 한전 지역 비교(전력데이터 개방포털)
+async function renderKepco() {
+  const box = $("#kepco");
+  if (!box) return;
+  let r;
+  try { r = await api("GET", "/api/kepco"); } catch (e) { box.replaceChildren(); return; }
+  const i = r.info, c = r.cmp;
+  const head = el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "한전 지역 비교"),
+    i.key ? el("button", { class: "small", onclick: async ev => { busy(ev.target, true, "받는 중"); try { await api("POST", "/api/kepco"); } finally { renderKepco(); } } }, "다시 받기") : null);
+  const lead = el("p", { class: "small muted" }, "한국전력공사 전력데이터 개방포털의 계약종별 전력사용량(지역 집계 통계)과 견줍니다. 시설 단위 자료는 포털에 없어 같은 지역·같은 계약종별 평균을 기준으로 씁니다.");
+  if (!i.key) {
+    box.replaceChildren(el("div", { class: "panel" }, head, lead,
+      el("div", { class: "empty small" }, "한전 전력데이터 개방포털 API 인증키가 없어 표시하지 않습니다. 포털에서 'API 인증키 신청'으로 받은 키를 환경변수 KEPCO_API_KEY에 넣으세요(지역: KEPCO_METRO 시도 코드, 기본 11 서울 · KEPCO_CITY 시군구, 기본 도봉구).")));
+    return;
+  }
+  const err = i.error ? el("div", { class: "small", style: { color: "var(--warn)", marginTop: "6px" } }, i.error + (c ? " 받아 둔 달만 씁니다." : "")) : null;
+  if (!c) { box.replaceChildren(el("div", { class: "panel" }, head, lead, err || el("div", { class: "empty small" }, "자료가 있는 달의 한전 통계가 아직 없습니다."))); return; }
+  const gapColor = v => (v == null ? null : v >= 10 ? "var(--bad)" : v <= -10 ? "var(--ok)" : null);
+  const tbl = el("table", { class: "t" },
+    el("thead", {}, el("tr", {}, ...["시설", "계약종별", "비교 기간", "우리 단가", "지역 평균 단가", "단가 차이", "우리 전년 대비", "지역 전년 대비", "차이"].map(h => el("th", {}, h)))),
+    el("tbody", {}, ...c.facilities.map(f => el("tr", {},
+      el("td", {}, f.fac), el("td", { title: f.tariff ? "고지서 계약종별: " + f.tariff : "고지서에 계약종별이 없어 일반용으로 봄" }, f.cntr + (f.tariff ? "" : "*")),
+      el("td", {}, `${f.from}~${f.to} (${f.months}개월)`),
+      el("td", {}, f.our_unit == null ? "-" : f.our_unit + "원/kWh"), el("td", {}, f.region_unit == null ? "-" : f.region_unit + "원/kWh"),
+      el("td", { style: { color: gapColor(f.unit_gap_pct) } }, f.unit_gap_pct == null ? "-" : pct(f.unit_gap_pct)),
+      el("td", {}, f.our_yoy == null ? "-" : pct(f.our_yoy)), el("td", {}, f.region_yoy == null ? "-" : pct(f.region_yoy)),
+      el("td", { style: { color: gapColor(f.yoy_gap) } }, f.yoy_gap == null ? "-" : (f.yoy_gap > 0 ? "+" : "") + f.yoy_gap.toFixed(1) + "%p")))));
+  const L = c.latest;
+  const lt = el("table", { class: "t" },
+    el("thead", {}, el("tr", {}, ...["계약종별", "고객호수", "사용량(kWh)", "전기요금", "평균판매단가"].map(h => el("th", {}, h)))),
+    el("tbody", {}, ...L.rows.map(x => el("tr", {}, el("td", {}, x.cntr), el("td", {}, num(x.cust, "호")), el("td", {}, num(x.kwh)), el("td", {}, won(x.won)), el("td", {}, x.unit == null ? "-" : x.unit + "원/kWh")))));
+  const s = r.solar;
+  box.replaceChildren(el("div", { class: "panel" }, head, lead, err,
+    el("div", { class: "small muted", style: { margin: "6px 0 10px" } }, `${c.area} · ${c.range[0]}~${c.range[1]} ${c.months}개월 · 출처 ${i.src}`),
+    el("h3", {}, "전년 같은 달 대비 전기 사용 증감: 우리 시설 전체와 " + c.area + " 일반용"),
+    yoyChart(c.monthly.filter(m => m.region_yoy != null && m.our_yoy != null).slice(-12)),
+    el("h3", { style: { marginTop: "16px" } }, "시설별 단가·증감 비교"),
+    el("div", { class: "tbl-scroll" }, tbl),
+    el("p", { class: "small muted" }, "단가 = 전기요금 ÷ 사용량(우리는 고지서, 지역은 한전 평균판매단가). 고압·저압과 계약 규모에 따라 단가가 다르므로 차이는 점검 실마리로만 씁니다. * 고지서에 계약종별이 없어 일반용으로 봄."),
+    el("h3", { style: { marginTop: "16px" } }, `${c.area} 계약종별 현황 (${L.ym})`),
+    el("div", { class: "tbl-scroll" }, lt),
+    s ? el("p", { class: "small", style: { marginTop: "12px" } }, `태양광 한전 전력거래계약(${s.year}년): ${s.city} ${s.cnt == null ? "-" : num(s.cnt, "개")}·${s.kw == null ? "-" : num(s.kw, " kW")} / ${s.metro} 전체 ${num(s.area_cnt, "개")}·${num(s.area_kw, " kW")}`) : null));
+}
+
+function yoyChart(rows) {
+  if (!rows.length) return el("div", { class: "empty small" }, "전년 같은 달 자료가 함께 있는 달이 없어 비교할 수 없습니다.");
+  const W = 1000, H = 220, L = 44, T = 14, B = 26, R = 8;
+  const lim = Math.max(5, ...rows.flatMap(x => [Math.abs(x.our_yoy), Math.abs(x.region_yoy)])) * 1.15;
+  const y = v => T + (H - T - B) * (1 - (v + lim) / (2 * lim)), bw = (W - L - R) / rows.length;
+  let g = `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="var(--line-strong)"/><text x="${L - 6}" y="${y(lim) + 8}" text-anchor="end">+${lim.toFixed(0)}%</text><text x="${L - 6}" y="${y(-lim)}" text-anchor="end">-${lim.toFixed(0)}%</text>`;
+  rows.forEach((x, i) => {
+    const w = bw * 0.32, y0 = y(0);
+    [[x.our_yoy, "var(--accent-strong)", "우리 시설 전체", 0.16], [x.region_yoy, "#7d8ea8", "지역 일반용", 0.5]].forEach(([v, col, nm, off]) => {
+      const y1 = y(v);
+      g += `<rect x="${L + i * bw + bw * off}" y="${Math.min(y0, y1)}" width="${w}" height="${Math.max(2, Math.abs(y1 - y0))}" rx="2" fill="${col}"><title>${x.ym} ${nm} 전년 대비 ${v > 0 ? "+" : ""}${v}%</title></rect>`;
+    });
+    if (i % 2 === 0 || rows.length <= 6) g += `<text x="${L + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${ymLabel(x.ym)}</text>`;
+  });
+  return el("div", {}, svgBox(W, H, g), el("div", { class: "small muted wx-legend" },
+    el("span", {}, el("i", { style: { background: "var(--accent-strong)" } }), "우리 시설 전체"), el("span", {}, el("i", { style: { background: "#7d8ea8" } }), "지역 일반용(한전 통계)")));
 }
