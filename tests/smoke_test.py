@@ -171,6 +171,17 @@ def checks(c):
     back = c.call("POST", "/api/budget/input", {"fy": 2026, "reset": True})
     tpl = c.call("POST", "/api/budget/template", {"fy": 2026}, raw=True)
     yield "엑셀 예산서로 되돌리기·예산서 양식 내려받기", back["source"].startswith("엑셀") and len(tpl) > 1000
+    rc = c.call("GET", "/api/recommend")
+    keys = {x["key"] for x in rc["items"]}
+    yield f"절감 조치 추천 {len(rc['items'])}건 ({', '.join(sorted(keys))})", {"냉방", "보일러", "휴관", "계약전력", "역률", "LED"} <= keys and all(x["basis"] for x in rc["items"] if x["key"] != "진단")
+    off = [x for x in rc["items"] if x["official"]]
+    yield "외부 공식 기준은 '원문 확인 필요' 표시", off and all(x["official"]["verified"] is False for x in off)
+    cool = next(x for x in rc["items"] if x["key"] == "냉방")
+    c.call("POST", "/api/actions", {"fac": cool["fac"], "title": cool["title"], "kind": "냉방", "finding": cool["finding"]})
+    rc2 = c.call("GET", "/api/recommend")
+    yield "추천을 조치로 등록하면 '등록됨'으로 바뀌고 합계에서 빠짐", next(x for x in rc2["items"] if x["key"] == "냉방" and x["fac"] == cool["fac"])["registered"] and rc2["totals"]["save_won"] < rc["totals"]["save_won"]
+    ai = c.call("POST", "/api/recommend/ai", {})
+    yield "추천 순서 요약(규칙 기반)", ai["text"].startswith("먼저 할 일") and ai["mode"]
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
     yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13

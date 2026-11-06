@@ -257,6 +257,9 @@ function renderAct() {
   box.append(el("div", { class: "panel" }, el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "절감 조치 이행·효과"),
     el("button", { class: "primary", onclick: () => actionForm(null) }, "조치 직접 등록")),
     el("p", { class: "small muted" }, "효과는 시행 전 기준선(기온 보정)과 시행 후 실제를 비교해 계산합니다. 휴관한 달은 빼고, 지침에 정한 기간 이상 쌓이면 '효과 확인'으로 바뀝니다.")));
+  const rec = el("div", { id: "rec" });
+  box.append(rec);
+  renderRecommend(rec);
   if (!S.effects.length) { box.append(el("div", { class: "panel empty" }, "등록된 조치가 없습니다. 점검 결과에서 '조치 등록'을 누르세요.")); return; }
   for (const e of S.effects) {
     const user = e.origin === "user";
@@ -794,4 +797,43 @@ async function renderFacData(box, up, bills) {
     el("h3", { style: { marginTop: "22px" } }, "달별 자료 채움"),
     el("div", { class: "cov-legend small muted" }, ...Object.values(COV).map(([t, col]) => el("span", {}, el("i", { style: { background: col } }), t)), el("span", {}, el("i", { class: "none" }), "자료 없음")),
     el("div", { class: "tbl-scroll" }, grid));
+}
+
+// ------------------------------------------------------------ 절감 조치 추천
+const REC_LV = { bad: ["먼저", "bad"], warn: ["검토", "warn"], gray: ["참고", "gray"] };
+async function renderRecommend(box) {
+  let r;
+  try { r = await api("GET", "/api/recommend"); } catch (e) { box.replaceChildren(); return; }
+  const aiBox = el("div", { class: "ans", style: { marginTop: "12px" } }, r.ai ? r.ai.text : "");
+  const aiMode = el("div", { class: "small muted" }, r.ai ? r.ai.mode + (r.ai.dropped ? " · " + r.ai.dropped : "") : "");
+  const aiBtn = el("button", { class: "primary", onclick: async () => {
+    busy(aiBtn, true, "추천 이유 쓰는 중");
+    try { const x = await api("POST", "/api/recommend/ai"); aiBox.textContent = x.text; aiMode.textContent = x.mode + (x.dropped ? " · " + x.dropped : ""); }
+    finally { busy(aiBtn, false); }
+  } }, S.llm ? "AI 추천 이유 쓰기" : "추천 순서 요약");
+  const card = x => el("div", { class: "rec-card" + (x.registered ? " done" : "") },
+    el("div", { class: "row", style: { gap: "8px", alignItems: "flex-start" } },
+      el("span", { class: "tag " + REC_LV[x.level][1] }, x.registered ? "등록함" : REC_LV[x.level][0]),
+      el("div", { style: { flex: 1 } }, el("b", {}, `${x.fac} · ${x.title}`), el("div", { class: "small", style: { marginTop: "4px" } }, x.why)),
+      x.save_won ? el("div", { class: "rec-save" }, el("b", {}, man(x.save_won)), el("span", { class: "small muted" }, x.key === "LED" ? "연간(추정)" : "줄일 수 있는 금액(추정)")) : null),
+    el("div", { class: "small muted", style: { marginTop: "6px" } }, x.formula ? "계산: " + x.formula : ""),
+    el("div", { class: "row", style: { marginTop: "8px", gap: "6px", flexWrap: "wrap" } },
+      x.basis ? basisChip(x.basis) : null,
+      x.official ? el("span", { class: "chip", title: x.official.text + " · " + x.official.note, onclick: () => modal(x.official.name, el("p", {}, x.official.text), el("p", { class: "small muted" }, x.official.note)) },
+        x.official.name.split("(")[0] + (x.official.verified ? "" : " · 원문 확인 필요")) : null,
+      el("span", { style: { flex: 1 } }),
+      x.registered ? null : el("button", { class: "small", onclick: async () => {
+        await api("POST", "/api/actions", { fac: x.fac, title: x.title, kind: x.key, finding: x.finding });
+        toast("조치로 등록했습니다"); await load();
+      } }, "조치 등록")));
+  box.replaceChildren(el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "추천 절감 조치"), aiBtn),
+    el("p", { class: "small muted" }, "점검 결과, 이미 해 본 조치의 실측 효과, 지침 조문을 묶어 시설별로 할 일을 골랐습니다. 효과가 크고 바로 할 수 있는 것부터 보여 줍니다."),
+    el("div", { class: "kpis", style: { marginTop: "10px", gridTemplateColumns: "repeat(3,1fr)" } },
+      el("div", { class: "stat hl" }, el("b", {}, man(r.totals.save_won)), el("span", { class: "lbl" }, "추천대로 하면 줄일 수 있는 금액(원, 추정·LED 제외)")),
+      el("div", { class: "stat" }, el("b", {}, r.items.filter(x => !x.registered).length + "건"), el("span", { class: "lbl" }, "아직 등록하지 않은 추천")),
+      el("div", { class: "stat" }, el("b", {}, r.totals.target_gap_kwh != null ? num(r.totals.target_gap_kwh) : "-"), el("span", { class: "lbl" }, "감축 목표까지 남은 전기(kWh)"))),
+    aiBox, aiMode,
+    el("div", { class: "rec-list" }, ...r.items.map(card)),
+    el("p", { class: "small muted" }, r.note)));
 }

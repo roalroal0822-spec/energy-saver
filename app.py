@@ -22,6 +22,7 @@ import budget
 import ingest
 import kma
 import qa
+import recommend
 
 VERSION = "1.1.0"
 HERE = Path(__file__).resolve().parent
@@ -156,7 +157,7 @@ def rebuild():
     apply_budget_input(ds)
     acts = ds.actions + user_actions()
     an = analysis.Analysis(ds, cfg, acts).run()
-    STATE.update(an=an, bills=bills, ds=ds)
+    STATE.update(an=an, bills=bills, ds=ds, rec_ai=None)
     return an
 
 
@@ -396,6 +397,41 @@ def summary(req):
 
 
 # ------------------------------------------------------------ 조치
+
+@app.get("/api/recommend")
+def get_recommend(req):
+    r = recommend.build(an())
+    r["ai"] = STATE.get("rec_ai")
+    return r
+
+
+@app.post("/api/recommend/ai")
+def recommend_ai(req):
+    """모델이 연결되어 있으면 추천 목록을 바탕으로 우선순위 설명을 쓴다. 사실에 없는 숫자가 있으면 버린다."""
+    a = an()
+    r = recommend.build(a)
+    facts = [f"{x['fac']} - {x['title']}: {x['why']}" + (f" 예상 절감 {x['save_won']:,}원" if x["save_won"] else "")
+             + (f" (근거 {x['basis']['reg']} {x['basis']['label']})" if x["basis"] else "") for x in r["items"] if not x["registered"]]
+    if not facts:
+        return {"text": "새로 추천할 조치가 없습니다.", "mode": "규칙 기반"}
+    rule = "먼저 할 일: " + "; ".join(f"{x['fac']} {x['title']}" for x in r["items"][:3] if not x["registered"]) + "."
+    res = {"text": rule, "mode": "규칙 기반", "dropped": ""}
+    if llm.enabled:
+        try:
+            out = llm.chat([{"role": "system", "content": "공공기관 시설 에너지 담당자에게 절감 조치 추천을 한국어 4~6문장으로 설명하세요. 아래 사실에 있는 숫자·시설·근거만 쓰고, 효과가 크고 비용이 적은 일부터 순서를 정해 이유를 말하세요."},
+                            {"role": "user", "content": "\n".join(f"- {x}" for x in facts)}], max_tokens=700)
+            allowed = qa._nums("\n".join(facts)) | {float(i) for i in range(0, 13)}
+            extra = [n for n in qa._nums(out) if n not in allowed and round(n) not in allowed]
+            if extra:
+                res["dropped"] = f"모델 설명에 사실에 없는 숫자({', '.join(str(x) for x in extra[:3])})가 있어 규칙 설명을 씁니다"
+            else:
+                res.update(text=out.strip(), mode="모델(사실 대조 통과)")
+        except LLMError as e:
+            res["dropped"] = f"모델 응답 실패({e})"
+    STATE["rec_ai"] = res
+    log("절감 조치 추천 설명", res["mode"])
+    return res
+
 
 @app.post("/api/actions")
 def add_action(req):

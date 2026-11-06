@@ -299,3 +299,10 @@ body:not(.admin) .admin-only { display: none !important; }
 .cov-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
 .cov-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .cov-legend i.none { border: 1px dashed var(--line-strong); }
+
+/* 절감 조치 추천 */
+.rec-list { display: grid; gap: 10px; margin-top: 14px; }
+.rec-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--panel); }
+.rec-card.done { opacity: .6; }
+.rec-save { text-align: right; min-width: 120px; }
+.rec-save b { display: block; font-size: 20px; color: var(--accent-strong); }
