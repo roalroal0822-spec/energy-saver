@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date
@@ -32,8 +33,12 @@ def key():
 def _get(path, **q):
     q.update(apiKey=key(), returnType="json")
     url = f"{BASE}/{path}?{urllib.parse.urlencode(q)}"
-    with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
-        text = r.read().decode("utf-8", "replace")
+    try:
+        with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
+            text = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:  # 어느 주소가 왜 실패했는지 화면에 보이게(키는 넣지 않음)
+        body = re.sub(r"<[^>]+>|\s+", " ", e.read().decode("utf-8", "replace")).strip()
+        raise RuntimeError(f"{path} HTTP {e.code} {body[:80]}".strip())
     try:
         d = json.loads(text)
     except ValueError:
@@ -66,10 +71,12 @@ def city_code(cache):
     return cache["city"]["code"]
 
 
-def parse_contract(d):
-    """계약종별 응답 → {계약종별: {cust, kwh, won, unit}}. 시군구 여러 개가 오면 더한다."""
+def parse_contract(d, city=None):
+    """계약종별 응답 → {계약종별: {cust, kwh, won, unit}}. city가 있으면 그 시군구 행만, 없으면 여러 시군구를 더한다."""
     out = {}
     for r in d.get("data") or d.get("totData") or []:
+        if city and (r.get("city") or "").strip() != city:
+            continue
         c = (r.get("cntr") or "").strip()
         kwh, won, cust = _n(r.get("powerUsage")), _n(r.get("bill")), _n(r.get("custCnt"))
         if not c or kwh is None:
@@ -96,7 +103,10 @@ def collect(months, cache):
     today = date.today().strftime("%Y-%m")
     err = ""
     try:
-        cc = city_code(cache)
+        try:
+            cc, by_name = city_code(cache), None
+        except Exception:  # 공통코드를 못 받으면 시도 전체를 받아 시군구 이름으로 고른다
+            cc, by_name = None, (CITY if CITY and not CITY.isdigit() else None)
         for ym in months:
             if ym >= today:
                 continue
@@ -106,7 +116,7 @@ def collect(months, cache):
             q = {"year": ym[:4], "month": ym[5:], "metroCd": METRO}
             if cc:
                 q["cityCd"] = cc
-            rows = parse_contract(_get("powerUsage/contractType.do", **q))
+            rows = parse_contract(_get("powerUsage/contractType.do", **q), by_name)
             mc[ym] = {"rows": rows, "at": time.time()}
     except Exception as e:  # 키 오류·승인 전·연결 실패
         err = f"한전 자료를 받지 못했습니다({str(e)[:100]})"
