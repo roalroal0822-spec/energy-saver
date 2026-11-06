@@ -331,6 +331,82 @@ def fake_kma():
     return s
 
 
+def fake_llm():
+    """OpenAI 호환 모델 서버 흉내(업스테이지 솔라 등). 받은 사실 첫 줄로 답하고, 질문에 '거짓'이 있으면 사실에 없는 숫자를 지어낸다."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            H.seen.append((self.headers.get("Authorization"), body))
+            msgs = body["messages"]
+            last = msgs[-1]["content"]
+            facts = [x[2:] for x in last.splitlines() if x.startswith("- ")]
+            sysmsg = msgs[0]["content"] if msgs[0]["role"] == "system" else ""
+            if "거짓" in last:
+                text = "추정 절감액은 987,654원입니다."
+            elif "결론 및 건의" in sysmsg:
+                text = "\n".join(f"- {f}" for f in facts[:3])
+            elif "다듬어" in sysmsg:
+                text = facts[0] if facts else ""
+            else:
+                text = f"<think>생각</think>정리하면 {facts[0] if facts else ''}"
+            out = {"choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]}
+            b = json.dumps(out, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b)
+
+        def log_message(self, *a):
+            pass
+
+    H.seen = []
+    s = HTTPServer(("127.0.0.1", 0), H)
+    s.seen = H.seen
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    return s
+
+
+def ai_checks(c, fl):
+    info = c.call("GET", "/api/info")
+    yield f"모델 연결 표시 {info['llm']}", info["llm"] == "openai:solar-pro4"
+    r1 = c.call("POST", "/api/ask", {"q": "체육센터 8월 전기 왜 늘었어?"})
+    yield "물어보기: 모델 답(생각 과정 태그 지움, 사실 대조 통과)", "모델" in r1["mode"] and "<think>" not in r1["answer"] and r1["answer"].startswith("정리하면")
+    yield "모델 서버에 키를 Authorization 으로 보냄", fl.seen[-1][0] == "Bearer test-llm-key" and fl.seen[-1][1]["model"] == "solar-pro4"
+    r2 = c.call("POST", "/api/ask", {"q": "그럼 가스는?", "history": [{"q": "체육센터 8월 전기 왜 늘었어?", "a": r1["answer"]}]})
+    sent = fl.seen[-1][1]["messages"]
+    yield f"이어 묻기: '그럼 가스는?'에 앞 질문의 '{r2['carried']}'를 이어받고 앞 대화를 모델에 전달", \
+        r2["carried"] == "종합체육센터 8월" and any("가스" in f for f in r2["facts"]) and len(sent) == 4 and sent[1]["content"].startswith("체육센터")
+    r3 = c.call("POST", "/api/ask", {"q": "우리 기관 에너지 상황 전반적으로 어때?"})
+    yield "정해진 주제가 아닌 질문도 기관 전체 현황 사실로 모델이 답함", r3["general"] and "모델" in r3["mode"] and len(r3["facts"]) > 3
+    r4 = c.call("POST", "/api/ask", {"q": "거짓 숫자 섞어서 말해봐"})
+    yield "모델이 사실에 없는 숫자(987,654)를 쓰면 버리고 규칙 답", r4["mode"] == "규칙 기반" and "987654" in r4["dropped"].replace(",", "")
+    fid = c.call("GET", "/api/state")["findings"][0]["id"]
+    ex = c.call("POST", f"/api/findings/{fid}/explain")
+    yield f"점검 결과 {fid} AI 해설", "모델" in ex["mode"] and ex["text"]
+    po = c.call("POST", "/api/report/polish", {"text": "체육센터 8월 전기 사용량은 12,345kWh로 늘었음."})
+    yield "보고서 문단 AI 다듬기(숫자 유지)", "모델" in po["mode"] and "12,345" in po["text"]
+    co = c.call("POST", "/api/report/conclusion")
+    yield f"AI 결론 및 건의 {len(co['lines'])}개 항목", "모델" in co["mode"] and len(co["lines"]) == 3 and not co["lines"][0].startswith("-")
+    sm = c.call("POST", "/api/summary")
+    yield "AI 총평(사실 대조 통과)", "모델" in sm["mode"]
+
+
+def start(env, port):
+    proc = subprocess.Popen([sys.executable, "run.py", "--no-browser", "--port", str(port)], cwd=ROOT, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    c = Client(port)
+    for _ in range(60):
+        try:
+            c.call("GET", "/api/info")
+            break
+        except Exception:
+            time.sleep(0.3)
+    return proc, c
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="smoke-energy-")
     port = free_port()
@@ -355,6 +431,18 @@ def main():
             total += 1
             failed += 0 if ok else 1
             print(f"  {'통과' if ok else '실패'}  {label}")
+        fl = fake_llm()
+        tmp2 = tempfile.mkdtemp(prefix="smoke-energy-ai-")
+        proc2, c2 = start(dict(env, APP_DATA_DIR=tmp2, LLM_PROVIDER="openai", LLM_BASE_URL=f"http://127.0.0.1:{fl.server_port}/v1",
+                               LLM_MODEL="solar-pro4", LLM_API_KEY="test-llm-key"), free_port())
+        try:
+            for label, ok in ai_checks(c2, fl):
+                total += 1
+                failed += 0 if ok else 1
+                print(f"  {'통과' if ok else '실패'}  {label}")
+        finally:
+            proc2.terminate()
+            shutil.rmtree(tmp2, ignore_errors=True)
     except Exception as e:
         total += 1
         failed += 1

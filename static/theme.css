@@ -355,3 +355,8 @@ body:not(.admin) .admin-only { display: none !important; }
 .rbe-thumb { width: 96px; height: 64px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
 .rb-p { margin: 2px 0; }
 @media (max-width: 980px) { .rep-split { grid-template-columns: 1fr; } .rep-right { position: static; } .rep-left, #rep-pv { max-height: none; } }
+
+/* 물어보기 대화 */
+.chat-turn { margin-bottom: 10px; }
+.chat-q { font-weight: 700; font-size: 15px; }
+.chat-q::before { content: "Q. "; color: var(--brand); }

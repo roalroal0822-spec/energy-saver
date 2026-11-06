@@ -303,12 +303,12 @@ function setupA11y() {
   const badge = $("#llm-badge");
   if (badge) right.append(badge);
   hdr.append(right);
-  api("GET", "/api/about").then(a => {
+  Promise.all([api("GET", "/api/about"), api("GET", "/api/info").catch(() => ({}))]).then(([a, info]) => {
     const mc = a.model_check;
     if (mc && mc.models && mc.models.length) {
       chip.textContent = "모델 교체 실측: " + mc.models.map(m => `${m.model} ${m.passed}/${m.total}`).join(" · ");
       chip.classList.add(mc.models.every(m => m.passed === m.total) ? "ok" : "warn");
-    } else chip.textContent = "모델 교체 실측 전 · 규칙 기반 동작";
+    } else chip.textContent = info.llm_enabled ? `모델 연결(${info.llm}) · 숫자 대조 켜짐` : "모델 교체 실측 전 · 규칙 기반 동작";
     const sc = a.scorecard;
     if (sc) chip.textContent += ` · 성적표 ${sc.date}`;
   }).catch(() => { chip.textContent = "서비스 구조·검증"; });
@@ -316,7 +316,7 @@ function setupA11y() {
 document.addEventListener("DOMContentLoaded", setupA11y);
 document.addEventListener("DOMContentLoaded", () => api("GET", "/api/info").then(i => {
   if (!i.public) return;
-  const b = el("div", { class: "public-note", role: "note" }, "공개 시연판입니다. 모의자료로만 써 보세요(개인정보·실제 업무자료를 넣지 마세요). 넣은 자료는 서버가 다시 시작되면 지워지고, 모델은 연결하지 않은 규칙 기반 상태입니다.");
+  const b = el("div", { class: "public-note", role: "note" }, "공개 시연판입니다. 모의자료로만 써 보세요(개인정보·실제 업무자료를 넣지 마세요). 넣은 자료는 서버가 다시 시작되면 지워지고, " + (i.llm_enabled ? "AI 답은 계산된 사실과 숫자를 대조해 통과한 것만 보여 줍니다." : "모델은 연결하지 않은 규칙 기반 상태입니다."));
   document.body.prepend(b);
 }).catch(() => {}));
 

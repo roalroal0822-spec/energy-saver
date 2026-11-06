@@ -344,7 +344,9 @@ def ask(req):
     if not q:
         raise HttpError(400, "질문을 입력하세요")
     q, hidden = mask(q)
-    r = qa.answer(an(), q, llm)
+    hist = [{"q": mask(str(h.get("q") or ""))[0][:300], "a": str(h.get("a") or "")[:1200]}
+            for h in ((req.json or {}).get("history") or [])[-4:] if isinstance(h, dict)]
+    r = qa.answer(an(), q, llm, hist)
     r["masked"] = hidden
     log("질문", q)
     return r
@@ -380,20 +382,8 @@ def rule_summary(a):
 def summary(req):
     a = an()
     text = rule_summary(a)
-    res = {"text": text, "mode": "규칙 기반", "dropped": ""}
-    if llm.enabled:
-        facts = [text] + [f"{f['title']}: {f['summary']}" for f in a.findings]
-        try:
-            out = llm.chat([{"role": "system", "content": "공공기관 에너지 관리 보고서의 '총평'을 한국어 4~6문장으로 쓰세요. 아래 사실에 있는 숫자와 내용만 쓰고, 우선순위와 다음 할 일을 말하세요."},
-                            {"role": "user", "content": "\n".join(f"- {x}" for x in facts)}], max_tokens=700)
-            allowed = qa._nums("\n".join(facts)) | {float(i) for i in range(0, 13)}
-            extra = [n for n in qa._nums(out) if n not in allowed and round(n) not in allowed]
-            if extra:
-                res["dropped"] = f"모델 총평에 사실에 없는 숫자({', '.join(str(x) for x in extra[:3])})가 있어 규칙 총평을 씁니다"
-            else:
-                res.update(text=out.strip(), mode="모델(사실 대조 통과)")
-        except LLMError as e:
-            res["dropped"] = f"모델 응답 실패({e})"
+    facts = [text] + [f"{f['title']}: {f['summary']}" for f in a.findings]
+    res = qa.guard(llm, "공공기관 에너지 관리 보고서의 '총평'을 한국어 4~6문장으로 쓰세요. 우선순위와 다음 할 일을 말하세요.", facts, text)
     STATE["summary"] = res
     return res
 
@@ -479,19 +469,7 @@ def recommend_ai(req):
     if not facts:
         return {"text": "새로 추천할 조치가 없습니다.", "mode": "규칙 기반"}
     rule = "먼저 할 일: " + "; ".join(f"{x['fac']} {x['title']}" for x in r["items"][:3] if not x["registered"]) + "."
-    res = {"text": rule, "mode": "규칙 기반", "dropped": ""}
-    if llm.enabled:
-        try:
-            out = llm.chat([{"role": "system", "content": "공공기관 시설 에너지 담당자에게 절감 조치 추천을 한국어 4~6문장으로 설명하세요. 아래 사실에 있는 숫자·시설·근거만 쓰고, 효과가 크고 비용이 적은 일부터 순서를 정해 이유를 말하세요."},
-                            {"role": "user", "content": "\n".join(f"- {x}" for x in facts)}], max_tokens=700)
-            allowed = qa._nums("\n".join(facts)) | {float(i) for i in range(0, 13)}
-            extra = [n for n in qa._nums(out) if n not in allowed and round(n) not in allowed]
-            if extra:
-                res["dropped"] = f"모델 설명에 사실에 없는 숫자({', '.join(str(x) for x in extra[:3])})가 있어 규칙 설명을 씁니다"
-            else:
-                res.update(text=out.strip(), mode="모델(사실 대조 통과)")
-        except LLMError as e:
-            res["dropped"] = f"모델 응답 실패({e})"
+    res = qa.guard(llm, "공공기관 시설 에너지 담당자에게 절감 조치 추천을 한국어 4~6문장으로 설명하세요. 효과가 크고 비용이 적은 일부터 순서를 정해 이유를 말하세요.", facts, rule)
     STATE["rec_ai"] = res
     log("절감 조치 추천 설명", res["mode"])
     return res
@@ -556,6 +534,75 @@ def _cite_text(s):
 
 def _basis_text(b):
     return f"{b['reg']} {b['label']}({b['title']})" if b else ""
+
+
+# ------------------------------------------------------------ 보고서 AI 작성(사실 대조)
+
+def _finding_facts(a, f):
+    facts = [f"{f['fac'] or '전체'} 점검 결과: {f['title']}", f["summary"]]
+    if f.get("amount"):
+        facts.append(f"{f['amount_label']} {f['amount']:,}원 (계산: {f['formula']})")
+    facts += [f"근거 자료: {e['label']}" for e in f["evidence"]]
+    facts += [f"확인할 일: {x}" for x in f["steps"]]
+    facts += [f"관련 기준: {_basis_text(b)} {b.get('text', '')[:200]}" for b in f["basis"] if b]
+    return facts
+
+
+@app.post("/api/findings/<fid>/explain")
+def explain_finding(req):
+    """점검 결과 하나를 담당자가 읽기 쉽게 풀어 쓴다(왜 문제인지, 확인 순서). 사실에 없는 숫자가 있으면 규칙 문장."""
+    a = an()
+    f = next((x for x in a.findings if x["id"] == req.params["fid"]), None)
+    if not f:
+        raise HttpError(404, "점검 결과를 찾을 수 없습니다")
+    rule = f"{f['summary']} 먼저 " + ", ".join(f["steps"][:2]) + "을(를) 확인하세요." if f["steps"] else f["summary"]
+    res = qa.guard(llm, "공공기관 에너지 점검 보고서에 들어갈 '해설' 문단을 한국어 3~4문장 공문체(~함, ~임)로 쓰세요. "
+                        "이 결과가 왜 문제인지, 원인으로 확인해 볼 것(단정하지 말 것), 확인 순서를 말하세요.", _finding_facts(a, f), rule)
+    log("점검 결과 해설", f"{f['id']} {res['mode']}")
+    return dict(res, id=f["id"])
+
+
+@app.post("/api/report/polish")
+def report_polish(req):
+    """보고서 문단 하나를 공문체로 다듬는다. 원문에 없는 숫자가 생기면 원문을 그대로 돌려준다."""
+    text = ((req.json or {}).get("text") or "").strip()
+    if not text:
+        raise HttpError(400, "다듬을 문장이 없습니다")
+    text = mask(text[:3000])[0]
+    if not llm.enabled:
+        return {"text": text, "mode": "규칙 기반", "dropped": "모델이 연결되지 않아 원문을 그대로 둡니다"}
+    res = qa.guard(llm, "아래 사실은 공공기관 보고서의 한 문단입니다. 뜻과 숫자를 바꾸지 말고 공문체(~함, ~임)로 간결하게 다듬어 한 문단으로만 출력하세요. "
+                        "제목·머리말·설명은 붙이지 마세요.", [text], text, max_tokens=900)
+    res["dropped"] = res["dropped"].replace("규칙 문장", "원문")
+    log("보고서 문단 다듬기", res["mode"])
+    return res
+
+
+@app.post("/api/report/conclusion")
+def report_conclusion(req):
+    """보고서 끝의 '결론 및 건의'. 점검 결과·추천·예산·목표에서 계산된 사실만 쓴다."""
+    a = an()
+    ov = a.overview()
+    facts = [rule_summary(a)]
+    facts += [f"점검 결과 {f['id']} {f['title']}" + (f" ({f['amount_label']} {f['amount']:,}원)" if f.get("amount") else "") for f in a.findings[:8]]
+    r = recommend.build(a, kp=kepco_cmp(a)[1])
+    todo = [x for x in r["items"] if not x["registered"]]
+    facts += [f"추천 조치: {x['fac']} {x['title']}" + (f" 예상 절감 {x['save_won']:,}원" if x["save_won"] else "") for x in todo[:6]]
+    rule = []
+    bad = [f for f in a.findings if f["level"] == "bad"]
+    if bad:
+        rule.append("우선 " + ", ".join(f"{f['fac']} {f['title']}" for f in bad[:3]) + "에 대한 확인·조치가 필요함.")
+    if todo:
+        rule.append("추천 절감 조치 중 " + ", ".join(f"{x['fac']} {x['title']}" for x in todo[:3]) + "부터 시행을 건의함.")
+    tg = ov.get("target")
+    if tg and tg["gap_kwh"]:
+        rule.append(f"감축 목표까지 {tg['gap_kwh']:,}kWh가 남아 있어 조치 이행 후 효과를 다시 측정할 필요가 있음.")
+    rule.append("조치 시행일을 한톨에 등록하면 기온을 감안한 절감 효과를 다음 점검에서 확인할 수 있음.")
+    res = qa.guard(llm, "공공기관 에너지 점검 보고서의 '결론 및 건의'를 공문체(~함, ~임)로 3~5개 항목으로 쓰세요. 한 줄에 한 항목, 앞에 기호를 붙이지 마세요. "
+                        "무엇을 누가 언제까지 하면 좋을지 우선순위대로 쓰세요.", facts, "\n".join(rule), max_tokens=900)
+    res["lines"] = [x.strip(" -·•*\t") for x in res["text"].splitlines() if x.strip(" -·•*\t")]
+    log("결론 및 건의", res["mode"])
+    return res
 
 
 @app.post("/api/findings/<fid>/request")

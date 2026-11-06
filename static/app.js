@@ -282,21 +282,39 @@ function renderAct() {
 
 // ------------------------------------------------------------ 물어보기
 const EX = ["체육센터 8월 전기 왜 늘었어?", "올해 예산 모자라는 곳 있어?", "내년 예산 얼마 잡아야 해?", "감축 목표 달성할 수 있어?", "얼마나 아낄 수 있어?", "역률 문제 있는 곳?", "면적당 가장 많이 쓰는 시설은?", "주차장 기본요금 줄일 수 있어?", "문화예술회관 2월 왜 이렇게 많이 썼어?"];
-async function ask(q) {
-  q = (q || $("#q").value).trim();
-  if (!q) return;
-  $("#q").value = q;
-  const out = $("#ask-out");
-  out.replaceChildren(el("div", { class: "panel" }, el("span", { class: "spinner" }), " 계산 결과에서 찾는 중"));
-  const r = await api("POST", "/api/ask", { q });
-  out.replaceChildren(el("div", { class: "panel" },
-    el("div", { class: "row" }, el("h3", { style: { flex: 1, margin: 0 } }, q), el("span", { class: "small muted" }, r.mode)),
+let CONV = [];  // 이어 묻기용 대화(질문·답). 새 대화를 누르면 비운다
+function askTurn(t) {
+  const r = t.r;
+  if (!r) return el("div", { class: "panel chat-turn" }, el("div", { class: "chat-q" }, t.q), el("div", {}, el("span", { class: "spinner" }), " 계산 결과에서 찾는 중"));
+  return el("div", { class: "panel chat-turn" },
+    el("div", { class: "row" }, el("div", { class: "chat-q", style: { flex: 1 } }, t.q), el("span", { class: "tag " + (/모델/.test(r.mode) ? "ok" : "gray") }, r.mode)),
+    r.carried ? el("p", { class: "small muted" }, `앞 질문의 '${r.carried}'를 이어서 봤습니다.`) : null,
     el("div", { class: "ans", style: { marginTop: "8px" } }, r.answer),
+    r.general && /모델/.test(r.mode) ? el("p", { class: "small muted" }, "※ 질문에 딱 맞는 계산이 없어 기관 전체 현황(시설별 사용량·점검 결과)으로 답했습니다.") : null,
     r.dropped ? el("p", { class: "small", style: { color: "var(--warn)" } }, "※ " + r.dropped) : null,
     r.masked && r.masked.length ? el("p", { class: "small muted" }, `※ 질문의 개인정보(${r.masked.join(", ")})를 ○○○로 가린 뒤 처리했습니다.`) : null,
     r.sources.length ? el("div", { class: "small muted", style: { marginTop: "8px" } }, "근거: ", citeChips(r.sources)) : null,
-    r.facts.length ? el("details", { style: { marginTop: "8px" } }, el("summary", { class: "small muted" }, `답에 쓴 사실 ${r.facts.length}개`),
-      el("ul", { class: "small" }, r.facts.map(f => el("li", {}, f)))) : null));
+    r.facts.length ? el("details", { style: { marginTop: "8px" } }, el("summary", { class: "small muted" }, `답에 쓴 사실 ${r.facts.length}개 (숫자는 모두 여기서만 가져옴)`),
+      el("ul", { class: "small" }, r.facts.map(f => el("li", {}, f)))) : null);
+}
+function drawConv() {
+  const out = $("#ask-out");
+  out.replaceChildren(...CONV.map(askTurn),
+    CONV.length ? el("div", { class: "row small muted", style: { justifyContent: "space-between" } },
+      el("span", {}, `이어서 물어보면 앞 질문의 시설·달을 이어받습니다. 예: "그럼 가스는?", "작년은?"`),
+      el("button", { class: "small", onclick: () => { CONV = []; drawConv(); } }, "새 대화")) : null);
+}
+async function ask(q) {
+  q = (q || $("#q").value).trim();
+  if (!q) return;
+  $("#q").value = "";
+  const history = CONV.filter(t => t.r).slice(-4).map(t => ({ q: t.q, a: t.r.answer }));
+  const turn = { q };
+  CONV.push(turn); drawConv();
+  try { turn.r = await api("POST", "/api/ask", { q, history }); }
+  catch (e) { CONV.pop(); $("#q").value = q; drawConv(); throw e; }
+  drawConv();
+  $("#ask-out").lastElementChild.previousElementSibling.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 // ------------------------------------------------------------ 보고서
@@ -385,6 +403,7 @@ function reportFields() {
   };
   const line = (val, set) => { const t = el("input", { value: val }); t.addEventListener("input", () => { set(t.value); refreshPreview(); }); return t; };
   const tools = i => el("span", { class: "rbe-tools" },
+    S.llm && ["p", "note", "bullet"].includes(REP[i][0]) ? el("button", { class: "small", title: "뜻과 숫자는 그대로 두고 공문체로 다듬습니다", onclick: e => aiPolish(i, e.currentTarget) }, "AI 다듬기") : null,
     el("button", { class: "icon-btn", title: "위로", disabled: i === 0, onclick: () => { [REP[i - 1], REP[i]] = [REP[i], REP[i - 1]]; drawReportEditor(); } }, "↑"),
     el("button", { class: "icon-btn", title: "아래로", disabled: i === REP.length - 1, onclick: () => { [REP[i + 1], REP[i]] = [REP[i], REP[i + 1]]; drawReportEditor(); } }, "↓"),
     el("button", { class: "small", onclick: () => { REP.splice(i + 1, 0, ["p", ""]); drawReportEditor(); } }, "+ 문단"),
@@ -418,6 +437,49 @@ async function aiRewriteSummary(btn) {
   } finally { busy(btn, false); }
 }
 
+async function aiPolish(i, btn) {
+  const b = REP[i];
+  busy(btn, true, "다듬는 중");
+  try {
+    const r = await api("POST", "/api/report/polish", { text: b[1] });
+    if (/모델/.test(r.mode)) { b[1] = r.text; toast("문단을 다듬었습니다(숫자 대조 통과)"); drawReportEditor(); }
+    else toast(r.dropped || "원문을 그대로 둡니다");
+  } finally { busy(btn, false); }
+}
+
+async function aiExplainFindings(btn) {
+  const ids = S.findings.map(f => f.id);
+  if (!ids.length) { toast("점검 결과가 없습니다"); return; }
+  let ok = 0, rule = 0;
+  try {
+    for (const [n, id] of ids.entries()) {
+      busy(btn, true, `해설 쓰는 중 ${n + 1}/${ids.length}`);
+      const r = await api("POST", `/api/findings/${id}/explain`);
+      const h = REP.findIndex(b => b[0] === "h3" && b[1].startsWith(id + ". "));
+      if (h < 0) continue;
+      const text = "해설: " + r.text;
+      const old = REP.findIndex((b, j) => j > h && b[0] === "p" && b[1].startsWith("해설: ") && !REP.slice(h + 1, j).some(x => x[0] === "h3" || x[0] === "h1"));
+      if (old > 0) REP[old][1] = text; else REP.splice(h + 2, 0, ["p", text]);
+      /모델/.test(r.mode) ? ok++ : rule++;
+    }
+    toast(`점검 결과 ${ok + rule}건에 해설을 넣었습니다` + (rule ? ` (모델 ${ok}건, 규칙 ${rule}건)` : ""));
+    drawReportEditor();
+  } finally { busy(btn, false); }
+}
+
+async function aiConclusion(btn) {
+  busy(btn, true, "결론 쓰는 중");
+  try {
+    const r = await api("POST", "/api/report/conclusion");
+    const sec = [["h1", "결론 및 건의"], ...r.lines.map(x => ["bullet", x])];
+    const old = REP.findIndex(b => b[0] === "h1" && /결론 및 건의/.test(b[1]));
+    if (old >= 0) { let e = old + 1; while (e < REP.length && REP[e][0] === "bullet") e++; REP.splice(old, e - old, ...sec); }
+    else { const at = REP.findIndex(b => b[0] === "h1" && /점검 기준과 계산/.test(b[1])); REP.splice(at >= 0 ? at : REP.length, 0, ...sec); }
+    toast(`결론 및 건의 ${r.lines.length}개 항목을 넣었습니다(${r.mode})` + (r.dropped ? " · " + r.dropped : ""));
+    drawReportEditor();
+  } finally { busy(btn, false); }
+}
+
 async function aiInsertRecommend(btn) {
   busy(btn, true, "추천 불러오는 중");
   try {
@@ -440,10 +502,12 @@ function drawReportEditor() {
   const nImg = REP.filter(b => b[0] === "image").length;
   const sumBtn = el("button", { class: "small", onclick: e => aiRewriteSummary(e.currentTarget) }, S.llm ? "AI로 총평 다시 쓰기" : "총평 다시 쓰기(규칙)");
   const recBtn = el("button", { class: "small", onclick: e => aiInsertRecommend(e.currentTarget) }, "추천 절감 조치 넣기");
+  const expBtn = el("button", { class: "small", onclick: e => aiExplainFindings(e.currentTarget) }, S.llm ? "점검 결과마다 AI 해설 넣기" : "점검 결과 해설 넣기(규칙)");
+  const conBtn = el("button", { class: "small", onclick: e => aiConclusion(e.currentTarget) }, S.llm ? "AI로 결론·건의 쓰기" : "결론·건의 넣기(규칙)");
   const left = el("div", { class: "rep-left" },
     el("div", { class: "rep-ai" }, el("b", {}, "AI 초안"),
-      el("p", { class: "small muted" }, `아래 칸은 점검 결과로 만든 초안입니다${S.llm ? "(총평은 모델이 쓰고, 계산된 사실에 없는 숫자가 있으면 버립니다)" : ""}. 고치면 오른쪽 미리보기에 바로 반영됩니다.`),
-      el("div", { class: "row", style: { gap: "6px", flexWrap: "wrap" } }, sumBtn, recBtn, el("button", { class: "small", onclick: () => addPhotos(REP.length) }, "사진 넣기(맨 끝)"))),
+      el("p", { class: "small muted" }, `아래 칸은 점검 결과로 만든 초안입니다${S.llm ? ". AI가 쓴 문장은 계산된 사실과 숫자를 대조해, 사실에 없는 숫자가 있으면 버리고 규칙 문장을 씁니다" : ". 모델을 연결하면 AI가 총평·해설·결론을 씁니다"}. 고치면 오른쪽 미리보기에 바로 반영됩니다.`),
+      el("div", { class: "row", style: { gap: "6px", flexWrap: "wrap" } }, sumBtn, expBtn, recBtn, conBtn, el("button", { class: "small", onclick: () => addPhotos(REP.length) }, "사진 넣기(맨 끝)"))),
     ...reportFields());
   const right = el("div", { class: "rep-right" }, el("div", { class: "rep-right-head small muted" }, `미리보기 · 블록을 누르면 왼쪽 칸으로 이동${nImg ? ` · 사진 ${nImg}장` : ""}`), el("div", { id: "rep-pv" }, reportPreview()));
   host.replaceChildren(el("div", { class: "panel" },

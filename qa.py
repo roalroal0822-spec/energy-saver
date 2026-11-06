@@ -4,8 +4,14 @@
 그 답을 버리고 규칙 답을 쓴다(지어낸 수치 차단).
 """
 import re
+import time
+from collections import deque
 
 from core.llm import LLMError
+
+# 모델 호출 한도(1분에 40번). 공개 시연판에서 키가 빨리 소진되지 않게 하고, 넘으면 규칙 문장을 쓴다
+RATE = deque()
+RATE_MAX = 40
 from ingest import ym_add
 
 RX_NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
@@ -222,25 +228,97 @@ def _nums(text):
     return out
 
 
-def answer(an, q, llm=None):
-    facts, srcs, rule = facts_for(an, q)
-    res = {"answer": rule, "mode": "규칙 기반", "facts": facts, "sources": [s for s in srcs if s][:6], "dropped": ""}
+def guard(llm, system, facts, rule, user=None, extra="", history=None, max_tokens=700):
+    """모델에게 사실 목록만 주고 문장을 쓰게 한 뒤, 사실에 없는 숫자가 있으면 버리고 규칙 문장을 쓴다.
+
+    돌려주는 값: {"text", "mode", "dropped"}. 모델이 없거나 실패하면 규칙 문장(mode='규칙 기반').
+    extra 는 숫자 대조 때 허용할 추가 문장(질문, 앞선 대화 등).
+    """
+    res = {"text": rule, "mode": "규칙 기반", "dropped": ""}
     if not (llm and llm.enabled and facts):
         return res
+    now = time.time()
+    while RATE and now - RATE[0] > 60:
+        RATE.popleft()
+    if len(RATE) >= RATE_MAX:
+        res["dropped"] = "요청이 많아 잠시 규칙 문장을 씁니다(1분 뒤 다시 시도)"
+        return res
+    RATE.append(now)
+    msgs = [{"role": "system", "content": system + " 아래 '사실'에 있는 숫자·시설·근거만 쓰고, 사실에 없는 숫자·원인·추측은 쓰지 마세요."}]
+    for h in history or []:
+        msgs += [{"role": "user", "content": h["q"]}, {"role": "assistant", "content": h["a"]}]
+    msgs.append({"role": "user", "content": "사실:\n" + "\n".join(f"- {f}" for f in facts) + (f"\n\n{user}" if user else "")})
     try:
-        text = llm.chat([
-            {"role": "system", "content": "당신은 공공기관 에너지 관리 담당자를 돕습니다. 아래 '사실'에 있는 내용과 숫자만 써서 질문에 한국어로 3~5문장으로 답하세요. "
-                                          "사실에 없는 숫자·원인·추측은 쓰지 마세요. 원인을 단정하지 말고 확인할 일을 말하세요."},
-            {"role": "user", "content": "사실:\n" + "\n".join(f"- {f}" for f in facts) + f"\n\n질문: {q}"}], max_tokens=600)
+        text = llm.chat(msgs, max_tokens=max_tokens).strip()
     except LLMError as e:
-        res["dropped"] = f"모델 응답 실패로 규칙 답을 보여 줍니다({e})"
+        res["dropped"] = f"모델 응답 실패로 규칙 문장을 씁니다({e})"
         return res
-    allowed = _nums("\n".join(facts) + " " + q + " " + rule) | {float(i) for i in range(0, 13)}
-    extra = sorted(n for n in _nums(text) if n not in allowed and round(n) not in allowed)
-    if extra:
-        res["dropped"] = f"모델 답에 사실에 없는 숫자({', '.join(str(x) for x in extra[:3])})가 있어 규칙 답을 보여 줍니다"
+    if not text:
+        res["dropped"] = "모델이 빈 답을 돌려줘 규칙 문장을 씁니다"
         return res
-    res.update(answer=text.strip(), mode="모델(사실 대조 통과)")
+    hist = " ".join(h["q"] + " " + h["a"] for h in history or [])
+    allowed = _nums("\n".join(facts) + " " + (user or "") + " " + rule + " " + extra + " " + hist) | {float(i) for i in range(0, 13)}
+    bad = sorted(n for n in _nums(text) if n not in allowed and round(n) not in allowed)
+    if bad:
+        res["dropped"] = f"모델 문장에 사실에 없는 숫자({', '.join(f'{x:g}' for x in bad[:3])})가 있어 규칙 문장을 씁니다"
+        return res
+    res.update(text=text, mode="모델(사실 대조 통과)")
+    return res
+
+
+RX_FOLLOW = re.compile(r"^\s*(그럼|그러면|그리고|그건|그거|거기|그곳|그 시설|그 달|그달|그때|작년|전년|가스는|전기는|왜\??$)")
+
+
+def carry(an, q, history):
+    """이어 묻는 질문('그럼 가스는?', '작년은?')이면 앞 질문의 시설·달을 붙인다. (새 질문, 붙인 말)"""
+    if not history:
+        return q, ""
+    short = len(q.replace(" ", "")) <= 10
+    if not (RX_FOLLOW.search(q) or short):
+        return q, ""
+    add = []
+    for h in reversed(history):
+        pq = h["q"]
+        if not _facility(an, q) and _facility(an, pq) and not any(_facility(an, x) for x in add):
+            add.append(_facility(an, pq))
+        m = re.search(r"(20\d{2}\s*년\s*)?\d{1,2}\s*월", pq)
+        if not _month(an, q) and m and not any(re.search(r"\d월", x) for x in add):
+            add.append(m.group(0))
+        if len(add) == 2:
+            break
+    if not add:
+        return q, ""
+    return " ".join(add) + " " + q, " ".join(add)
+
+
+def overview_facts(an):
+    """주제를 못 찾은 질문에 모델이 쓸 수 있는 기관 전체 사실."""
+    ov = an.overview()
+    t = ov["totals"]
+    facts = [f"최근 12개월({ov['recent'][0]}~{ov['recent'][1]}) 시설 {len(ov['facilities'])}곳 전기 {_fmt(t['kwh'], 'kWh')}, 전기·가스 요금 {_fmt(t['cost'], '원')}",
+             f"점검 결과 {t['findings']}건, 찾은 금액 합계(추정) {_fmt(t['amount'], '원')}"]
+    for f in ov["facilities"]:
+        facts.append(f"{f['name']}: 전기 {_fmt(f['kwh'], 'kWh')}, 면적당 {f['kwh_per_m2']}kWh/㎡"
+                     + (f", 전년 대비 {_p(f['change_pct'])}" if f["change_pct"] is not None else "")
+                     + (f", 기온 보정 후 {_p(f['norm_pct'])}" if f["norm_pct"] is not None else ""))
+    for x in an.findings[:8]:
+        facts.append(f"점검 결과 {x['id']}: {x['title']}" + (f" ({x['amount_label']} {_fmt(x['amount'], '원')})" if x.get("amount") else ""))
+    return facts
+
+
+def answer(an, q, llm=None, history=None):
+    history = [h for h in (history or []) if h.get("q") and h.get("a")][-4:]
+    q2, carried = carry(an, q, history)
+    facts, srcs, rule = facts_for(an, q2)
+    general = False
+    if not facts and llm and llm.enabled:
+        facts, general = overview_facts(an), True
+    res = {"answer": rule, "mode": "규칙 기반", "facts": facts, "sources": [s for s in srcs if s][:6], "dropped": "",
+           "carried": carried, "general": general}
+    g = guard(llm, "당신은 공공기관 에너지 관리 담당자를 돕습니다. 질문에 한국어로 3~5문장으로 답하세요. 원인을 단정하지 말고 확인할 일을 말하세요."
+              + (" 사실만으로 답할 수 없으면 그렇다고 말하고, 한톨에서 볼 수 있는 화면을 알려 주세요." if general else ""),
+              facts, rule, user=f"질문: {q2}", extra=q, history=history, max_tokens=700)
+    res.update(answer=g["text"], mode=g["mode"], dropped=g["dropped"].replace("규칙 문장", "규칙 답"))
     return res
 
 

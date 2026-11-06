@@ -30,7 +30,7 @@ FAMILIES = [
     {"key": "gpt-oss", "name": "GPT-OSS", "maker": "OpenAI", "match": r"gpt-oss|gpt_oss", "ollama": ["gpt-oss:20b"], "reasoning": True},
     {"key": "exaone", "name": "엑사원(EXAONE)", "maker": "LG AI연구원", "match": r"exaone", "ollama": ["exaone3.5:2.4b", "exaone3.5:7.8b"]},
     {"key": "hyperclovax", "name": "하이퍼클로바X(HyperCLOVA X)", "maker": "네이버", "match": r"hyperclova|hcx", "ollama": []},
-    {"key": "solar", "name": "솔라(Solar)", "maker": "업스테이지", "match": r"solar", "ollama": ["solar-pro"]},
+    {"key": "solar", "name": "솔라(Solar)", "maker": "업스테이지", "match": r"solar", "ollama": ["solar-pro"], "reasoning": True},
 ]
 
 # 추론형 모델이 답 앞에 붙이는 생각 과정(<think>…</think>, <thought>…</thought>)
