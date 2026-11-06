@@ -110,6 +110,52 @@ def facts_for(an, q):
                 return facts, srcs, "\n".join(f"{f['title']}: {f['summary']} 할 일: " + "; ".join(f["steps"]) for f in hits)
             return facts, srcs, "해당하는 점검 결과가 없습니다."
 
+    if re.search(r"예산|불용|추경|집행|편성|내년|유가|전용|모자라|부족", q):
+        import budget
+        b = budget.Budget(an, an.cfg)
+        if re.search(r"편성|내년|유가", q):
+            ny = b.next_year()
+            t = ny["totals"]
+            items = [i for i in ny["items"] if not fac or i["fac"] == fac]
+            facts.append(f"{ny['fy']}년도 공공요금 요구액 합계 {_fmt(t['request'], '원')}" + (f", 올해 예산현액 대비 {t['change_pct']:+.1f}%" if t["change_pct"] is not None else "")
+                         + f", 기후 위험 여유분 {_fmt(t['risk'], '원')}")
+            for i in items:
+                facts.append(f"{i['fac']} {i['item']} 요구액 {_fmt(i['request'], '원')}: {i['basis']}")
+            oil = ny["oil"]
+            if oil.get("has"):
+                facts.append(f"두바이유 최근 12개월 평균 {oil['now_avg']}달러, 내년 반영 시기 평균 {oil['next_avg']}달러(전망), 가스 단가 {oil['gas_change_pct']:+.1f}%")
+            lines = [f"{ny['fy']}년도 공공요금 예산은 {_fmt(t['request'], '원')}이 필요합니다"
+                     + (f"(올해 예산현액 대비 {t['change_pct']:+.1f}%)" if t["change_pct"] is not None else "") + "."]
+            if oil.get("has"):
+                lines.append(f"국제유가(두바이유)가 최근 평균 {oil['now_avg']}달러에서 {oil['next_avg']}달러로 오를 전망이라 가스 단가를 {oil['gas_change_pct']:+.1f}% 반영했습니다.")
+            lines.append(f"이상기온(폭염·한파)에 대비하려면 기후 위험 여유분 {_fmt(t['risk'], '원')}을 더 검토하세요.")
+            lines += [f"- {i['fac']} {i['item']}: {_fmt(i['request'], '원')} ({i['basis']})" for i in items[:6]]
+            return facts, srcs, "\n".join(lines)
+        cur = b.current()
+        if not cur or not cur["items"]:
+            return facts, srcs, "예산서가 없습니다. '자료 넣기'에 본예산·추경 엑셀을 넣어 주세요."
+        t = cur["totals"]
+        items = [i for i in cur["items"] if not fac or i["fac"] == fac]
+        facts.append(f"{cur['fy']}년 공공요금 예산현액 {_fmt(t['current'], '원')}, 집행 {_fmt(t['spent'], '원')}(집행률 {t['exec_pct']}%, 경과율 {cur['elapsed_pct']}%), "
+                     f"연말 예상 집행 {_fmt(t['expected'], '원')}, 예상 잔액 {_fmt(t['remain'], '원')}")
+        for i in items:
+            facts.append(f"{i['fac']} {i['item']} 예산현액 {_fmt(i['current'], '원')}, 집행 {_fmt(i['spent'], '원')}, 남은 달 예측 {_fmt(i['fc'], '원')}, "
+                         f"예상 잔액 {_fmt(i['remain'], '원')}({i['remain_pct']:+.1f}%), {i['state']}" + (f", {int(i['run_out'][5:])}월분부터 부족" if i["run_out"] else ""))
+            srcs.append(i["src"])
+        lines = [f"{cur['fy']}년 공공요금 예산 {_fmt(t['current'], '원')} 중 {cur['latest'][5:].lstrip('0')}월분까지 {_fmt(t['spent'], '원')}을 썼고(집행률 {t['exec_pct']}%), "
+                 f"남은 달 예측을 더하면 연말 잔액은 {_fmt(t['remain'], '원')}로 예상됩니다."]
+        for i in items:
+            if i["state"] == "부족 예상":
+                lines.append(f"- {i['fac']} {i['item']}: {int(i['run_out'][5:])}월분부터 부족, {_fmt(-i['remain'], '원')} 모자랄 전망입니다.")
+            elif i["state"] == "불용 예상":
+                lines.append(f"- {i['fac']} {i['item']}: {_fmt(i['remain'], '원')}({i['remain_pct']:.1f}%) 남을 전망(불용 예상)입니다.")
+            elif fac:
+                lines.append(f"- {i['fac']} {i['item']}: 예상 잔액 {_fmt(i['remain'], '원')}로 적정합니다.")
+        for m in cur["moves"]:
+            facts.append(f"전용 검토: {m['from']} → {m['to']} {_fmt(m['amount'], '원')}")
+            lines.append(f"전용 검토: {m['from']} 잔액에서 {m['to']}로 {_fmt(m['amount'], '원')}을 옮기면 부족분을 줄일 수 있습니다(기관 규정 확인).")
+        return facts, srcs, "\n".join(lines)
+
     if re.search(r"목표|달성", q):
         tg = ov.get("target")
         if not tg:

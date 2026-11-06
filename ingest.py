@@ -118,6 +118,8 @@ class Dataset:
         self.gas = {}
         self.actions = []
         self.guide = None  # (Regulation, 문서)
+        self.budget = []  # [{"fy","fac","item","main","supp","transfer","note","src"}] 예산서
+        self.oil = {}  # ym → {"oil","fx","kind","src"} 국제유가·환율
         self.files = []  # 읽은 파일 요약
         self.warnings = []
         self.conflicts = []
@@ -166,10 +168,67 @@ def _rows(doc, t):
         yield cols, get, loc, " | ".join(str(c) for c in row if str(c).strip())
 
 
+ITEM = {"전기료": r"전기", "가스료": r"가스|연료|난방"}
+
+
+def _item_of(s):
+    s = str(s or "")
+    for k, rx in ITEM.items():
+        if re.search(rx, s):
+            return k
+    return None
+
+
+def read_budget_oil(ds, doc, t):
+    """예산서(본예산·추경)와 국제유가 표. 다른 표가 아니면 False."""
+    hdr = [str(h).replace(" ", "") for h in t["header"]]
+    locs = t.get("row_locs") or [f"{t.get('loc_prefix', '')}{i + 2}행" for i in range(len(t["rows"]))]
+    find = lambda rx: [i for i, h in enumerate(hdr) if re.search(rx, h)]  # noqa: E731
+    main = find(r"본예산|당초예산")
+    if main:
+        fac, item, fy = (find(r"시설|부서|사업") or [None])[0], (find(r"과목|세목|구분") or [None])[0], (find(r"회계연도|연도") or [None])[0]
+        supp, trans, note = find(r"추경|추가경정"), find(r"전용|이용|이체"), (find(r"비고") or [None])[0]
+        n = 0
+        for row, loc in zip(t["rows"], locs):
+            g = lambda i: row[i] if i is not None and i < len(row) else None  # noqa: E731
+            it = _item_of(g(item))
+            mv = _num(g(main[0]))
+            if not it or mv is None:
+                continue
+            ds.budget.append({"fy": int(_num(g(fy)) or 0) or None, "fac": ds.fac_name(g(fac)) if fac is not None else "전체", "item": it,
+                              "main": mv, "supp": sum(_num(g(i)) or 0 for i in supp), "transfer": sum(_num(g(i)) or 0 for i in trans),
+                              "supp_cols": [t["header"][i] for i in supp], "note": str(g(note) or "").strip(),
+                              "src": _cite(doc, loc, " | ".join(str(c) for c in row if str(c).strip()))})
+            n += 1
+        ds.files.append({"file": doc.relpath, "kind": "예산서(본예산·추경)", "rows": n})
+        return True
+    oil = find(r"두바이|유가|원유")
+    ymc = find(r"연월|년월")
+    if oil and ymc:
+        fx, kind = (find(r"환율") or [None])[0], (find(r"구분") or [None])[0]
+        n = 0
+        for row, loc in zip(t["rows"], locs):
+            ym = norm_ym(row[ymc[0]] if ymc[0] < len(row) else None)
+            o = _num(row[oil[0]] if oil[0] < len(row) else None)
+            if not ym or o is None:
+                continue
+            ds.oil[ym] = {"oil": o, "fx": _num(row[fx]) if fx is not None and fx < len(row) else None,
+                          "kind": str(row[kind]).strip() if kind is not None and kind < len(row) else "",
+                          "src": _cite(doc, loc, " | ".join(str(c) for c in row if str(c).strip()))}
+            n += 1
+        ds.files.append({"file": doc.relpath, "kind": "국제유가·환율", "rows": n})
+        return True
+    return False
+
+
 def read_tables(ds, docs):
-    pending = []
+    pending, later = [], []
     for doc in docs:
         for t in doc.tables:
+            hdr = "".join(str(h) for h in t["header"])
+            if re.search(r"본예산|당초예산|두바이|유가|원유", hdr):
+                later.append((doc, t))
+                continue
             cols = _map_header(t["header"])
             kind = _kind_of(cols, doc.name + t.get("name", ""))
             if kind:
@@ -227,6 +286,8 @@ def read_tables(ds, docs):
             n += 1
         ds.files.append({"file": doc.relpath, "kind": {"facility": "시설 현황", "weather": "기온", "elec": "전력 내역",
                                                        "gas": "가스 내역", "action": "조치 이력"}[kind], "rows": n})
+    for doc, t in later:
+        read_budget_oil(ds, doc, t)
 
 
 # ------------------------------------------------------------ 고지서 PDF

@@ -17,6 +17,7 @@ from core.store import Store
 from core.xlsx import CTYPE as XLSX, workbook
 
 import analysis
+import budget
 import ingest
 import qa
 
@@ -33,6 +34,10 @@ ENERGY = {
     "co2_per_kwh": 0.4594,
     # 시간대별 전력량 단가(원/kWh: 경부하, 중간부하, 최대부하). 모의값이므로 기관 계약종별 단가로 바꿔 쓰세요
     "tariff": {"summer": [105, 160, 240], "spring": [100, 125, 155], "winter": [110, 155, 205]},
+    # 예산 관리 가정값. 불용 판정 기준(%), 가스 단가의 유가·환율 연동 비율과 시차(개월), 전기 연료비 조정(연동 비율, kWh당 상·하한 원),
+    # 내년 이상기온 시나리오 폭(여름 +℃, 겨울 -℃), 내년 요금 인상률(%). 모두 기관 사정에 맞게 바꿔 쓰세요
+    "budget": {"unused_pct": 5, "gas_oil_pass": 0.6, "oil_lag": 3, "elec_oil_pass": 0.1, "elec_fuel_cap": 5,
+               "climate_summer": 1.5, "climate_winter": 2.0, "elec_up_pct": 0, "gas_up_pct": 0},
 }
 
 cfg = Config(HERE, {"app_title": "한톨(에너지 절감 비서)", "port": 8104, "energy": ENERGY})
@@ -47,6 +52,8 @@ ABOUT = {
                  ("기온 보정 기준선", "기준 기간 12개월로 '기저+냉방도일+난방도일' 모델을 맞추고 설명력·오차율 공개"),
                  ("기준값을 지침에서", "초과 10%·역률 90%·감축 목표 5% 같은 기준을 기관 지침 조문에서 읽음"),
                  ("점검 6종", "초과 사용·가스·휴관 미정지·계약전력·역률·요금 재계산, 결과마다 근거와 계산식"),
+                 ("예산 관리", "예산서(본예산·추경)와 고지 금액으로 집행률, 남은 달은 기온 보정 모델로 예측해 불용·부족 판정"),
+                 ("내년 편성 근거", "평년 기온 × 최근 사용 수준 × 단가 전망(유가·환율 연동·요금 인상), 이상기온 여유분은 따로"),
                  ("모델 보조(선택)", "못 읽은 고지서 칸, 답 문장 다듬기. 결과는 원문·사실과 대조"),
                  ("근거 카드", "답·보고서에 원본 행과 지침 조문 원문을 그대로 붙임")],
     "guards": ["판단(초과·미달·금액)은 모델이 하지 않고 계산으로만 합니다.",
@@ -55,11 +62,13 @@ ABOUT = {
                "점검 기준값은 지침 조문에서 읽고, 지침에 없는 값은 '기본값'으로 따로 표시합니다.",
                "금액은 모두 '추정'으로 표시하고 계산식과 단가 출처(고지서·설정값)를 붙입니다.",
                "휴관한 달은 초과 사용·조치 효과 계산에서 빼고, 휴관 기준으로 따로 봅니다.",
+               "예산 예측과 편성액은 계산식과 가정값(유가 연동 비율·기후 시나리오 등)을 모두 화면과 문서에 함께 적습니다.",
                "질문에 적은 개인정보(전화·주민번호·계좌 등)는 저장·모델 전달 전에 ○○○로 가립니다.",
                "원본 파일은 읽기만 하고, 작업 기록을 모두 남깁니다."],
     "data": ["시연 자료는 모두 지어낸 모의자료입니다(시설 5곳, 2024.10~2026.09). 실제 기관 자료로 바꾸면 그대로 동작합니다.",
              "월평균기온은 모의값입니다. 실제 사용 때는 기상청 관할 관측소 자료를 넣습니다.",
              "요금 단가·배출계수는 설정값(config.json)이며 기관 계약종별 단가로 바꿔 씁니다.",
+             "예산서(본예산·추경)와 국제유가·환율(실적·전망)도 모의값입니다. 기관 예산서와 한국석유공사 페트로넷·한국은행 자료로 바꿔 넣습니다.",
              "자료는 이 PC의 작업 폴더(data)에만 저장되고, 화면은 이 PC에서만 열립니다."],
 }
 webcommon.register_about(app, HERE, ABOUT)
@@ -108,8 +117,29 @@ def an():
 @app.get("/api/state")
 def get_state(req):
     a = an()
+    cur = budget.Budget(a, cfg).current()
     return {"overview": a.overview(), "findings": a.findings, "effects": a.effects(),
-            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled}
+            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled,
+            "budget": {"fy": cur["fy"], "totals": cur.get("totals"), "items": [{k: i[k] for k in ("fac", "item", "state", "remain", "run_out")} for i in cur["items"]]} if cur else None}
+
+
+# ------------------------------------------------------------ 예산
+
+def _bopts(src):
+    out = {}
+    for k in ("save_pct", "elec_up_pct", "gas_up_pct", "climate_summer", "climate_winter"):
+        v = src.get(k)
+        if v not in (None, ""):
+            try:
+                out[k] = max(-50.0, min(50.0, float(v)))
+            except (TypeError, ValueError):
+                raise HttpError(400, f"{k} 값은 숫자로 입력하세요")
+    return out
+
+
+@app.get("/api/budget")
+def get_budget(req):
+    return budget.Budget(an(), cfg, _bopts(req.query)).run()
 
 
 @app.get("/api/series")
@@ -198,6 +228,11 @@ def rule_summary(a):
     for e in a.effects():
         if e.get("saved_pct") is not None:
             lines.append(f"{e['fac']} '{e['title']}'은 시행 후 {e['months']}개월 동안 기온을 감안해 {e['saved_pct']}% 줄었습니다.")
+    cur = budget.Budget(a, cfg).current()
+    if cur and cur["items"]:
+        bt = cur["totals"]
+        lines.append(f"{cur['fy']}년 공공요금 예산은 연말까지 {bt['expected']:,}원 집행이 예상되어 잔액은 {bt['remain']:,}원입니다"
+                     + "".join(f"; {i['fac']} {i['item']} {i['state']}({i['remain']:,}원)" for i in cur["items"] if i["state"] != "적정") + ".")
     return " ".join(lines)
 
 
@@ -370,6 +405,70 @@ def report(req):
     return file_response(data, f"에너지사용점검보고서_{ov['recent'][1]}.{fmt}", ctype)
 
 
+def _won(v):
+    return "" if v is None else f"{v:,.0f}"
+
+
+@app.post("/api/budget/report")
+def budget_report(req):
+    a = an()
+    b = budget.Budget(a, cfg, _bopts({**req.query, **(req.json or {})})).run()
+    cur, nm, ny = b["current"], b["next_month"], b["next_year"]
+    blocks = [("title", f"{cur['fy']}년 공공요금 예산 집행 관리 및 {ny['fy']}년도 편성 근거(안)"),
+              ("p", f"작성일 {date.today().isoformat()} · 자료 기준 {cur['latest']}(고지 기준) · 작성: 한톨(에너지 절감 비서), 규칙·계산 기반")]
+    if cur["items"]:
+        t = cur["totals"]
+        blocks += [("h1", f"1. {cur['fy']}년 예산 집행 현황"),
+                   ("p", f"예산현액 {_won(t['current'])}원(본예산 {_won(t['main'])}원, 추경·전용 {_won(t['supp'])}원) 중 {_won(t['spent'])}원을 집행해 집행률 {t['exec_pct']}%"
+                         f"(경과율 {cur['elapsed_pct']}%)입니다. 남은 달 예측 {_won(t['fc'])}원을 더하면 연말 예상 집행액은 {_won(t['expected'])}원, 예상 잔액은 {_won(t['remain'])}원입니다."),
+                   ("table", ["시설", "과목", "본예산", "추경·전용", "예산현액", "집행액", "남은 달 예측", "예상 잔액", "판정"],
+                    [[i["fac"], i["item"], _won(i["main"]), _won(i["supp"] + i["transfer"]), _won(i["current"]), _won(i["spent"]), _won(i["fc"]),
+                      f"{_won(i['remain'])} ({i['remain_pct']:+.1f}%)", i["state"] + (f"({int(i['run_out'][5:])}월분부터)" if i["run_out"] else "")] for i in cur["items"]],
+                    [2, 1, 2, 2, 2, 2, 2, 3, 2]),
+                   ("note", "※ " + cur["note"])]
+        short = [i for i in cur["items"] if i["state"] == "부족 예상"]
+        unused = [i for i in cur["items"] if i["state"] == "불용 예상"]
+        blocks.append(("h2", "조치 의견"))
+        for i in short:
+            blocks.append(("bullet", f"{i['fac']} {i['item']}: {int(i['run_out'][5:]) if i['run_out'] else 12}월분 고지부터 부족, 부족 예상액 {_won(i.get('need'))}원. "
+                                     + (f"전용 후에도 {_won(i['need_after_moves'])}원은 추경 증액이 필요합니다." if i.get("need_after_moves") else "아래 전용으로 메울 수 있습니다.")))
+        for m in cur["moves"]:
+            blocks.append(("bullet", f"전용 검토: {m['from']} 잔액에서 {m['to']}로 {_won(m['amount'])}원 (기관 예산 집행 규정·승인 절차 확인)"))
+        for i in unused:
+            blocks.append(("bullet", f"{i['fac']} {i['item']}: 불용 예상 {_won(i['remain'])}원({i['remain_pct']:.1f}%). 전용 뒤 남는 금액은 감액 추경 또는 다른 사업 재배정을 검토하고, 내년 편성액에 반영합니다."))
+        if not short and not unused:
+            blocks.append(("bullet", "모든 과목이 적정 범위입니다."))
+    if nm and nm["rows"]:
+        blocks += [("h1", f"2. 다음 달({nm['ym']}) 요금 예측"),
+                   ("table", ["시설", "전기(kWh)", "전기요금", "가스(㎥)", "가스요금", "합계"],
+                    [[r["fac"], _won(r.get("elec", {}).get("qty")), _won(r.get("elec", {}).get("cost")), _won(r.get("gas", {}).get("qty")),
+                      _won(r.get("gas", {}).get("cost")), _won(r["cost"])] for r in nm["rows"]], [3, 2, 2, 2, 2, 2]),
+                   ("p", f"합계 {_won(nm['total'])}원(추정)."), ("note", "※ " + nm["note"])]
+    t = ny["totals"]
+    blocks += [("h1", f"3. {ny['fy']}년도 공공요금 예산 편성 근거(안)"),
+               ("p", f"요구액 합계 {_won(t['request'])}원" + (f"(올해 예산현액 대비 {t['change_pct']:+.1f}%)" if t["change_pct"] is not None else "")
+                     + f", 기후 위험 여유분 {_won(t['risk'])}원(포함 시 {_won(t['with_risk'])}원)."),
+               ("table", ["시설", "과목", "요구액(원)", "올해 예산현액", "증감", "기후 위험 여유분", "산출 근거"],
+                [[i["fac"], i["item"], _won(i["request"]), _won(i["prev_budget"]), f"{i['change_pct']:+.1f}%" if i["change_pct"] is not None else "",
+                  _won(i["risk"]), i["basis"]] for i in ny["items"]], [2, 1, 2, 2, 1, 2, 6]),
+               ("h2", "편성 가정"),
+               ("table", ["항목", "값", "설명"], [[x["k"], x["v"], x["detail"]] for x in ny["assume"]], [2, 4, 6])]
+    oil = ny["oil"]
+    if oil.get("has"):
+        blocks.append(("p", f"국제유가(두바이유): 최근 12개월 평균 {oil['now_avg']}달러/배럴, 내년 단가에 반영될 시기 평균 {oil['next_avg']}달러/배럴(전망). "
+                            f"유가×환율 변화 {(oil['ratio'] - 1) * 100:+.1f}% → 가스 단가 {oil['gas_change_pct']:+.1f}%."))
+    else:
+        blocks.append(("p", oil["note"]))
+    blocks += [("h2", "기후변화 대응"),
+               ("p", f"내년 예상 전기 사용량 {_won(t['kwh'])}kWh, 온실가스 {t['co2_t']:,}tCO2eq(배출계수 {cfg['energy']['co2_per_kwh']} kgCO2eq/kWh, 설정값)."
+                     + (f" 지침의 감축 목표 {t['target_pct']:g}%를 달성하면 {t['co2_target_t']:,}tCO2eq입니다." if t.get("target_pct") else "")),
+               ("note", "※ " + ny["note"] + " 금액은 모두 추정이며, 확정 단가·요금 조정은 공급사 고지에 따릅니다.")]
+    fmt = req.query.get("fmt", "hwpx")
+    data, ctype = export(blocks, fmt)
+    log("예산 문서 만들기", f"{cur['fy']} 집행 관리·{ny['fy']} 편성 근거")
+    return file_response(data, f"공공요금예산_{cur['fy']}집행관리_{ny['fy']}편성근거.{fmt}", ctype)
+
+
 @app.post("/api/export-xlsx")
 def export_xlsx(req):
     """점검 결과·시설별 월 내역·조치 효과를 엑셀 한 파일로."""
@@ -391,6 +490,15 @@ def export_xlsx(req):
                    [[e["fac"], e["title"], e["date"], e["status"], e["state"], f"{e['from']}~{e['to']}" if e.get("from") else "",
                      e.get("saved_kwh"), e.get("saved_pct"), e.get("saved_won"), e.get("co2_t")] for e in a.effects()],
                    [12, 30, 11, 8, 14, 16, 14, 9, 16, 14]))
+    bd = budget.Budget(a, cfg).run()
+    cur, ny = bd["current"], bd["next_year"]
+    if cur["items"]:
+        sheets.append((f"{cur['fy']} 예산 집행", ["시설", "과목", "본예산", "추경·전용", "예산현액", "집행액", "남은 달 예측", "연말 예상 집행", "예상 잔액", "잔액률(%)", "판정", "소진 달", "예산서 출처"],
+                       [[i["fac"], i["item"], i["main"], i["supp"] + i["transfer"], i["current"], i["spent"], i["fc"], i["expected"], i["remain"], i["remain_pct"],
+                         i["state"], i["run_out"] or "", _cite_text(i["src"])] for i in cur["items"]], [12, 8, 14, 12, 14, 14, 14, 14, 14, 9, 10, 9, 40]))
+    sheets.append((f"{ny['fy']} 편성 근거", ["시설", "과목", "예상 사용량", "단위", "요구액(원)", "올해 예산현액", "증감(%)", "기후 위험 여유분", "산출 근거"],
+                   [[i["fac"], i["item"], i["qty"], i["unit"], i["request"], i["prev_budget"], i["change_pct"], i["risk"], i["basis"]] for i in ny["items"]],
+                   [12, 8, 14, 6, 14, 14, 9, 14, 80]))
     data = workbook(sheets, note=f"한톨(에너지 절감 비서) {VERSION} · 작성일 {date.today().isoformat()} · 금액은 고지서 단가와 설정값으로 계산한 추정치")
     log("엑셀 내보내기", ov["recent"][1] if ov["recent"] else "")
     return file_response(data, f"에너지점검_{ov['recent'][1] if ov['recent'] else ''}.xlsx", XLSX)

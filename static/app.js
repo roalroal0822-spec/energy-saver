@@ -10,6 +10,8 @@ const LV = { bad: "조치 필요", warn: "검토", gray: "설정 확인" };
 async function load(data) {
   S = data || await api("GET", "/api/state");
   renderHome(); renderFind(); renderFacSel(); renderAct(); renderReport(); renderData();
+  BUD = null;
+  if (!$("#tab-budget").hidden) renderBudget();
 }
 
 function basisChip(b) {
@@ -49,6 +51,7 @@ function renderHome() {
     el("div", { class: "flow" }, "흐름:", el("b", {}, "고지서·내역 넣기"), "→", el("b", {}, "기온 보정 진단"), "→", el("b", {}, "점검 요청서"), "→", el("b", {}, "조치 등록"), "→", el("b", {}, "효과 측정·보고"))));
 
   if (o.target) box.append(targetPanel(o.target));
+  if (S.budget && S.budget.totals) box.append(budgetBrief(S.budget));
   if (o.outlook && o.outlook.rows.length) box.append(outlookPanel(o.outlook));
 
   const sum = el("div", { class: "ans", id: "summary-text" }, "");
@@ -107,6 +110,20 @@ function targetPanel(t) {
       el("div", { class: "stat hl" }, el("b", {}, pct(t.after_fix_pct)), el("span", { class: "lbl" }, "점검 결과를 조치했다면"))),
     el("div", { style: { marginTop: "12px" } }, s),
     el("p", { class: "small muted" }, t.note + ". 빨간 막대는 기준선보다 더 쓴 시설, 초록 점선은 목표선입니다. '조치했다면'은 점검 결과의 기온 보정 초과 사용분이 없었다고 보고 다시 계산한 값입니다."));
+}
+
+function budgetBrief(b) {
+  const t = b.totals, warn = b.items.filter(i => i.state !== "적정");
+  return el("div", { class: "panel" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, `${b.fy}년 공공요금 예산`),
+      el("button", { onclick: () => GO("budget") }, "예산 관리 열기")),
+    el("div", { class: "kpis", style: { marginTop: "12px", gridTemplateColumns: "repeat(4,1fr)" } },
+      el("div", { class: "stat" }, el("b", {}, man(t.current)), el("span", { class: "lbl" }, "예산현액(원)")),
+      el("div", { class: "stat" }, el("b", {}, t.exec_pct + "%"), el("span", { class: "lbl" }, "집행률")),
+      el("div", { class: "stat" }, el("b", {}, man(t.expected)), el("span", { class: "lbl" }, "연말 예상 집행")),
+      el("div", { class: "stat hl" }, el("b", { style: { color: t.remain < 0 ? "var(--bad)" : "" } }, man(t.remain)), el("span", { class: "lbl" }, "연말 예상 잔액"))),
+    warn.length ? el("div", { style: { marginTop: "10px" } }, warn.map(i => el("div", { class: "small" },
+      el("span", { class: "tag " + STATE_TAG[i.state] }, i.state), ` ${i.fac} ${i.item} `, i.state === "부족 예상" ? `${+i.run_out.slice(5)}월분부터 ${won(-i.remain)} 부족` : `${won(i.remain)} 남을 전망`))) : null);
 }
 
 function outlookPanel(o) {
@@ -259,7 +276,7 @@ function renderAct() {
 }
 
 // ------------------------------------------------------------ 물어보기
-const EX = ["체육센터 8월 전기 왜 늘었어?", "감축 목표 달성할 수 있어?", "얼마나 아낄 수 있어?", "역률 문제 있는 곳?", "면적당 가장 많이 쓰는 시설은?", "주차장 기본요금 줄일 수 있어?", "문화예술회관 2월 왜 이렇게 많이 썼어?"];
+const EX = ["체육센터 8월 전기 왜 늘었어?", "올해 예산 모자라는 곳 있어?", "내년 예산 얼마 잡아야 해?", "감축 목표 달성할 수 있어?", "얼마나 아낄 수 있어?", "역률 문제 있는 곳?", "면적당 가장 많이 쓰는 시설은?", "주차장 기본요금 줄일 수 있어?", "문화예술회관 2월 왜 이렇게 많이 썼어?"];
 async function ask(q) {
   q = (q || $("#q").value).trim();
   if (!q) return;
@@ -347,7 +364,7 @@ async function renderLog() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  GO = setupTabs(id => { if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) renderFac(); });
+  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) renderFac(); });
   $("#fac-sel").addEventListener("change", renderFac);
   $("#kind-sel").addEventListener("change", renderFac);
   $("#ask-btn").addEventListener("click", () => ask());
@@ -356,3 +373,168 @@ document.addEventListener("DOMContentLoaded", async () => {
   await load();
   if (!$("#tab-fac").hidden) renderFac();
 });
+
+// ------------------------------------------------------------ 예산 관리
+let BUD = null;
+const man = v => (v == null ? "-" : Math.abs(v) >= 1e8 ? (v / 1e8).toFixed(2) + "억" : Math.round(v / 1e4).toLocaleString("ko-KR") + "만");
+let BSEL = "";
+const STATE_TAG = { "부족 예상": "bad", "불용 예상": "warn", "적정": "ok" };
+const BOPT = { save_pct: 0, elec_up_pct: 0, gas_up_pct: 0, climate_summer: 1.5 };
+
+async function renderBudget() {
+  const box = $("#tab-budget");
+  if (!BUD) box.replaceChildren(el("div", { class: "panel" }, el("span", { class: "spinner" }), " 예산 계산 중"));
+  const q = Object.entries(BOPT).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  BUD = await api("GET", "/api/budget?" + q);
+  box.replaceChildren(...[budgetCurrent(BUD.current), budgetNextMonth(BUD.next_month), budgetNextYear(BUD.next_year), budgetDocs()].filter(Boolean));
+}
+
+function itemCum(i) {
+  const m = {};
+  i.months_spent.forEach(x => { m[x.ym] = { ym: x.ym, spent: x.spent, fc: 0, lo: 0, hi: 0, actual: true }; });
+  i.months_fc.forEach(x => { m[x.ym] = { ym: x.ym, spent: 0, fc: x.cost, lo: x.lo, hi: x.hi, actual: false }; });
+  let acc = 0;
+  return Object.keys(m).sort().map(k => { acc += m[k].spent + m[k].fc; return { ...m[k], cum: acc }; });
+}
+
+function cumChart(c) {
+  const it = BSEL ? c.items.find(i => `${i.fac}|${i.item}` === BSEL) : null;
+  const rows = it ? itemCum(it) : c.cum, t = it ? { main: it.main, current: it.current } : c.totals;
+  const W = 1100, H = 280, L = 70, B = 30, T = 16, R = 150;
+  const mx = Math.max(t.current, rows[rows.length - 1].cum + rows.reduce((s, r) => s + (r.actual ? 0 : r.hi - r.fc), 0)) * 1.08;
+  const step = (W - L - R) / (rows.length - 1 || 1), x = i => L + i * step, y = v => T + (H - T - B) * (1 - v / mx);
+  let svg = "";
+  for (let i = 0; i <= 4; i++) { const v = mx * i / 4; svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#ece6dc"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${Math.round(v / 1e8 * 10) / 10}억</text>`; }
+  if (t.main !== t.current) svg += `<line x1="${L}" x2="${W - R}" y1="${y(t.main)}" y2="${y(t.main)}" stroke="#a89a88" stroke-dasharray="3 4"/><text x="${L + 8}" y="${y(t.main) + (t.main < t.current ? 16 : -6)}" style="fill:#7a6c5d">본예산 ${man(t.main)}</text>`;
+  svg += `<line x1="${L}" x2="${W - R}" y1="${y(t.current)}" y2="${y(t.current)}" stroke="#2f241b" stroke-width="2"/><text x="${L + 8}" y="${y(t.current) + (t.main < t.current ? -6 : 16)}" style="fill:#2f241b;font-weight:700">예산현액 ${man(t.current)}</text>`;
+  let acc = 0, lo = 0, hi = 0, act = [], fc = [], band = [];
+  rows.forEach((r, i) => {
+    acc += r.spent + r.fc; lo += r.spent + r.lo; hi += r.spent + r.hi;
+    if (r.actual && !r.fc) act.push(`${x(i)},${y(acc)}`);
+    else { if (!fc.length && act.length) fc.push(act[act.length - 1]); fc.push(`${x(i)},${y(acc)}`); band.push([x(i), y(lo), y(hi)]); }
+    svg += `<text x="${x(i)}" y="${H - B + 18}" text-anchor="middle">${+r.ym.slice(5)}월</text>`;
+  });
+  if (band.length) {
+    const p0 = fc[0].split(",");
+    const up = [p0.join(","), ...band.map(b => `${b[0]},${b[2]}`)], dn = [...band.map(b => `${b[0]},${b[1]}`).reverse(), p0.join(",")];
+    svg += `<polygon points="${up.concat(dn).join(" ")}" fill="var(--accent)" opacity=".13"/>`;
+    svg += `<polyline points="${fc.join(" ")}" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="7 5"/>`;
+  }
+  svg += `<polyline points="${act.join(" ")}" fill="none" stroke="var(--accent-strong)" stroke-width="3"/>`;
+  act.forEach(p => { const [a, b] = p.split(","); svg += `<circle cx="${a}" cy="${b}" r="3.5" fill="var(--accent-strong)"/>`; });
+  const end = rows[rows.length - 1].cum, over = end > t.current;
+  svg += `<text x="${x(rows.length - 1) + 10}" y="${y(end) + 5}" style="fill:${over ? "#d7263d" : "var(--accent-strong)"};font-weight:700">연말 ${man(end)}</text>`;
+  svg += `<text x="${x(rows.length - 1) + 10}" y="${y(end) + 22}" style="fill:${over ? "#d7263d" : "#7a6c5d"}">${over ? man(end - t.current) + " 부족" : man(t.current - end) + " 남음"}</text>`;
+  if (over) { const k = rows.findIndex(r => r.cum > t.current); if (k >= 0) svg += `<circle cx="${x(k)}" cy="${y(rows[k].cum)}" r="7" fill="none" stroke="#d7263d" stroke-width="2.5"/><text x="${x(k)}" y="${y(rows[k].cum) - 14}" text-anchor="middle" style="fill:#d7263d;font-weight:700">${+rows[k].ym.slice(5)}월 소진</text>`; }
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("class", "chart"); s.innerHTML = svg;
+  return s;
+}
+
+function budgetCurrent(c) {
+  if (!c || !c.items.length) return el("div", { class: "panel empty" }, (c && c.note) || "예산서가 없습니다. '자료 넣기'에 본예산·추경 엑셀을 넣어 주세요.");
+  const t = c.totals;
+  const short = c.items.filter(i => i.state === "부족 예상"), unused = c.items.filter(i => i.state === "불용 예상");
+  const opinions = el("div", {},
+    short.map(i => el("div", { class: "finding" }, el("i", { class: "dot bad" }), el("div", {},
+      el("div", { class: "ttl" }, `${i.fac} ${i.item}: ${+i.run_out.slice(5)}월분 고지부터 부족 · ${won(i.need)} 모자람`),
+      el("div", { class: "small muted" }, i.need_after_moves ? `아래 전용을 하고도 ${won(i.need_after_moves)}은 추경 증액이 필요합니다.` : "아래 전용으로 메울 수 있습니다.")))),
+    c.moves.map(m => el("div", { class: "finding" }, el("i", { class: "dot warn" }), el("div", {},
+      el("div", { class: "ttl" }, `전용 검토: ${m.from} → ${m.to} ${won(m.amount)}`),
+      el("div", { class: "small muted" }, `불용 예상 잔액에서 예산현액의 ${c.unused_pct}%는 남기고 옮기는 안입니다. 기관 예산 집행 규정과 승인 절차를 확인하세요.`)))),
+    unused.map(i => el("div", { class: "finding" }, el("i", { class: "dot warn" }), el("div", {},
+      el("div", { class: "ttl" }, `${i.fac} ${i.item}: 불용 예상 ${won(i.remain)} (${i.remain_pct}%)`),
+      el("div", { class: "small muted" }, "전용 뒤 남는 금액은 감액 추경이나 다른 사업 재배정을 검토하고, 내년 편성액에 반영하세요.")))),
+    !short.length && !unused.length ? el("p", { class: "small" }, "모든 과목이 적정 범위입니다.") : null);
+  return el("div", {},
+    el("div", { class: "panel" },
+      el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, `${c.fy}년 공공요금 예산 관리`),
+        el("span", { class: "small muted" }, `${c.latest}분 고지까지 · 경과율 ${c.elapsed_pct}%`)),
+      el("div", { class: "kpis", style: { marginTop: "14px" } },
+        el("div", { class: "stat" }, el("b", {}, man(t.current)), el("span", { class: "lbl" }, `예산현액(본예산 ${man(t.main)} + 추경·전용 ${man(t.supp)})`)),
+        el("div", { class: "stat" }, el("b", {}, t.exec_pct + "%"), el("span", { class: "lbl" }, `집행 ${man(t.spent)} · 경과율 ${c.elapsed_pct}%`)),
+        el("div", { class: "stat" }, el("b", {}, man(t.expected)), el("span", { class: "lbl" }, `연말 예상 집행(남은 달 ${man(t.fc)})`)),
+        el("div", { class: "stat hl" }, el("b", { style: { color: t.remain < 0 ? "var(--bad)" : "" } }, man(t.remain)), el("span", { class: "lbl" }, "연말 예상 잔액(원)")),
+        el("div", { class: "stat hl" }, el("b", {}, `부족 ${t.short}`, el("small", { style: { fontSize: ".6em", color: "var(--muted)" } }, ` · 불용 ${t.unused}`)), el("span", { class: "lbl" }, `과목 ${c.items.length}개 판정`))),
+      el("div", { class: "row", style: { marginTop: "16px" } }, el("b", { style: { flex: 1 } }, "누적 집행과 연말 예측"),
+        el("select", { id: "bud-sel", onchange: e => { BSEL = e.target.value; $("#bud-chart").replaceChildren(cumChart(c)); } },
+          el("option", { value: "" }, "전체 과목"), c.items.map(i => el("option", { value: `${i.fac}|${i.item}`, selected: BSEL === `${i.fac}|${i.item}` }, `${i.fac} ${i.item} (${i.state})`)))),
+      el("div", { id: "bud-chart", style: { marginTop: "6px" } }, cumChart(c)),
+      el("div", { class: "legend", style: { marginTop: "4px" } },
+        el("span", {}, "━ 누적 집행(고지)"), el("span", {}, "┅ 남은 달 예측(색 띠는 오차 범위)"), el("span", {}, "━ 예산현액 · ┄ 본예산")),
+      el("p", { class: "small muted" }, c.note)),
+    el("div", { class: "panel" }, el("h3", {}, "과목별 판정"),
+      el("table", { class: "t" }, el("tr", {}, ["시설", "과목", "본예산", "추경·전용", "예산현액", "집행액", "남은 달 예측", "예상 잔액", "판정", "예산서"].map(h => el("th", {}, h))),
+        c.items.map(i => el("tr", {}, el("td", {}, i.fac), el("td", {}, i.item), el("td", {}, man(i.main)),
+          el("td", { title: i.note || "" }, i.supp + i.transfer ? (i.supp + i.transfer > 0 ? "+" : "") + man(i.supp + i.transfer) : "-"),
+          el("td", {}, el("b", {}, man(i.current))), el("td", {}, `${man(i.spent)} (${i.exec_pct}%)`), el("td", { title: i.months_fc.map(m => `${m.ym} ${won(m.cost)}${m.billed_missing ? "(고지 전)" : ""}`).join("\n") }, man(i.fc)),
+          el("td", { style: { color: i.remain < 0 ? "var(--bad)" : "" } }, `${man(i.remain)} (${i.remain_pct > 0 ? "+" : ""}${i.remain_pct}%)`),
+          el("td", {}, el("span", { class: "tag " + STATE_TAG[i.state] }, i.state + (i.run_out ? ` · ${+i.run_out.slice(5)}월` : ""))),
+          el("td", {}, srcChip(i.src)))))),
+    el("div", { class: "panel", id: "bud-op" }, el("h3", {}, "조치 의견"), opinions));
+}
+
+function budgetNextMonth(n) {
+  if (!n || !n.rows.length) return null;
+  return el("div", { class: "panel", id: "bud-next" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, `다음 달(${+n.ym.slice(5)}월) 요금 예측`),
+      el("span", { class: "amount" }, won(n.total))),
+    el("table", { class: "t", style: { marginTop: "10px" } }, el("tr", {}, ["시설", "전기 사용량", "전기요금(범위)", "가스 사용량", "가스요금(범위)", "합계"].map(h => el("th", {}, h))),
+      n.rows.map(r => el("tr", {}, el("td", {}, r.fac),
+        el("td", {}, r.elec ? num(r.elec.qty, " kWh") : "-"), el("td", {}, r.elec ? `${won(r.elec.cost)} (${man(r.elec.lo)}~${man(r.elec.hi)})` : "-"),
+        el("td", {}, r.gas ? num(r.gas.qty, " ㎥") : "-"), el("td", {}, r.gas ? `${won(r.gas.cost)} (${man(r.gas.lo)}~${man(r.gas.hi)})` : "-"),
+        el("td", {}, el("b", {}, won(r.cost)))))),
+    el("p", { class: "small muted" }, n.note));
+}
+
+function oilChart(o) {
+  const W = 520, H = 150, L = 34, B = 22, T = 10, RP = 22;
+  const v = o.series.map(s => s.oil), mn = Math.min(...v) - 2, mx = Math.max(...v) + 2;
+  const x = i => L + i * (W - L - RP) / (v.length - 1), y = a => T + (H - T - B) * (1 - (a - mn) / (mx - mn));
+  const fi = o.series.findIndex(s => (s.kind || "").includes("전망"));
+  let svg = `<text x="${L - 6}" y="${y(mx) + 8}" text-anchor="end">${Math.round(mx)}</text><text x="${L - 6}" y="${y(mn)}" text-anchor="end">${Math.round(mn)}</text>`;
+  if (fi > 0) svg += `<rect x="${x(fi)}" y="${T}" width="${W - RP - x(fi)}" height="${H - T - B}" fill="var(--accent-soft)"/><text x="${x(fi) + 6}" y="${T + 14}" style="fill:var(--accent-strong)">전망</text>`;
+  svg += `<polyline points="${v.map((a, i) => `${x(i)},${y(a)}`).join(" ")}" fill="none" stroke="var(--accent-strong)" stroke-width="2"/>`;
+  [0, Math.floor(v.length / 2), v.length - 1].forEach(i => { svg += `<text x="${x(i)}" y="${H - 4}" text-anchor="middle">${o.series[i].ym.slice(2).replace("-", ".")}</text>`; });
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", `0 0 ${W} ${H}`); s.setAttribute("class", "chart"); s.innerHTML = svg;
+  return s;
+}
+
+function budgetNextYear(n) {
+  if (!n) return null;
+  const t = n.totals;
+  const inp = (k, label, unit) => el("label", { class: "small", style: { display: "inline-flex", alignItems: "center", gap: "6px" } }, label,
+    el("input", { type: "number", step: "0.5", value: BOPT[k], id: "bopt-" + k, style: { width: "70px" }, oninput: e => { BOPT[k] = e.target.value || 0; } }), unit);
+  const btn = el("button", { class: "primary", onclick: async () => { busy(btn, true, "다시 계산 중"); try { await renderBudget(); } finally { busy(btn, false); } } }, "다시 계산");
+  const o = n.oil;
+  return el("div", { id: "bud-ny" },
+    el("div", { class: "panel" },
+      el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, `${n.fy}년도 예산 편성 근거`), el("span", { class: "small muted" }, "평년 기온 · 최근 사용 수준 · 단가 전망")),
+      el("div", { class: "row", style: { marginTop: "10px", gap: "14px", flexWrap: "wrap" } },
+        inp("save_pct", "추가 절감 목표", "%"), inp("elec_up_pct", "전기요금 인상", "%"), inp("gas_up_pct", "가스요금 인상", "%"), inp("climate_summer", "여름 이상고온", "℃"), btn),
+      el("div", { class: "kpis", style: { marginTop: "14px" } },
+        el("div", { class: "stat hl" }, el("b", {}, man(t.request)), el("span", { class: "lbl" }, `${n.fy}년 요구액(원)`)),
+        el("div", { class: "stat" }, el("b", { style: { color: t.change_pct > 0 ? "var(--bad)" : "var(--ok)" } }, t.change_pct == null ? "-" : pct(t.change_pct)), el("span", { class: "lbl" }, "올해 예산현액 대비")),
+        el("div", { class: "stat" }, el("b", {}, man(t.risk)), el("span", { class: "lbl" }, "기후 위험 여유분(폭염·한파)")),
+        el("div", { class: "stat" }, el("b", {}, o.has ? pct(o.gas_change_pct) : "-"), el("span", { class: "lbl" }, o.has ? `가스 단가(유가 ${o.now_avg}→${o.next_avg}달러)` : "유가 자료 없음")),
+        el("div", { class: "stat" }, el("b", {}, num(t.co2_t)), el("span", { class: "lbl" }, t.target_pct ? `전기 온실가스 tCO2eq(목표 달성 시 ${num(t.co2_target_t)})` : "전기 온실가스 tCO2eq"))),
+      el("table", { class: "t", style: { marginTop: "14px" } }, el("tr", {}, ["시설", "과목", "요구액", "올해 예산현액", "증감", "기후 위험 여유분", "산출 근거"].map(h => el("th", {}, h))),
+        n.items.map(i => el("tr", {}, el("td", {}, i.fac), el("td", {}, i.item), el("td", {}, el("b", {}, won(i.request))), el("td", {}, man(i.prev_budget)),
+          el("td", { style: { color: i.change_pct > 0 ? "var(--bad)" : "var(--ok)" } }, i.change_pct == null ? "-" : pct(i.change_pct)), el("td", {}, man(i.risk)),
+          el("td", { class: "small" }, i.basis)))),
+      el("p", { class: "small muted" }, n.note)),
+    el("div", { class: "grid2" },
+      el("div", { class: "panel" }, el("h3", {}, "편성 가정"),
+        el("table", { class: "t" }, n.assume.map(a => el("tr", {}, el("td", {}, el("b", {}, a.k)), el("td", {}, a.v, el("div", { class: "small muted" }, a.detail)))))),
+      el("div", { class: "panel" }, el("h3", {}, "국제유가(두바이유, 달러/배럴)"),
+        o.has ? oilChart(o) : null,
+        el("p", { class: "small muted" }, o.note, " ", o.src ? srcChip(o.src) : null))));
+}
+
+function budgetDocs() {
+  return el("div", { class: "panel", id: "bud-docs" }, el("h3", {}, "예산 문서"),
+    el("p", { class: "small muted" }, "올해 집행 관리 현황(판정·조치 의견·전용 검토), 다음 달 예측, 내년 편성 근거(산출 근거·가정·유가·온실가스)를 한 문서로 만듭니다. 위에서 바꾼 가정값이 그대로 들어갑니다."),
+    el("div", { class: "row" }, el("span", { class: "small muted" }, "내려받기:"), exportButtons("/api/budget/report", () => ({ ...BOPT })),
+      el("button", { onclick: () => download("/api/export-xlsx", {}) }, "엑셀(XLSX)")));
+}

@@ -76,7 +76,24 @@ def checks(c):
     q = c.call("POST", "/api/ask", {"q": "감축 목표 달성할 수 있어?"})
     yield "목표 질문 답변", "목표" in q["answer"] and "제14조" not in q["answer"] and q["sources"]
     d = c.call("POST", "/api/export-xlsx", {}, raw=True)
-    yield "엑셀 내보내기(시트 3개)", d[:2] == b"PK" and _sheets(d) == ["점검 결과", "시설별 월 내역", "조치 효과"]
+    yield "엑셀 내보내기(시트 5개: 점검·월 내역·조치 효과·예산 집행·내년 편성)", d[:2] == b"PK" and _sheets(d) == ["점검 결과", "시설별 월 내역", "조치 효과", "2026 예산 집행", "2027 편성 근거"]
+    b = c.call("GET", "/api/budget")
+    cur, ny, nm = b["current"], b["next_year"], b["next_month"]
+    st = {(i["fac"], i["item"]): i for i in cur["items"]}
+    yield f"예산서 읽기(본예산·추경 {len(cur['items'])}과목, 예산현액 {cur['totals']['current']:,}원)", len(cur["items"]) == 9 and cur["totals"]["current"] == 1_404_000_000
+    yield (f"예산 판정: 체육센터 전기료 {st[('종합체육센터', '전기료')]['state']}·문화예술회관 전기료 {st[('문화예술회관', '전기료')]['state']}",
+           st[("종합체육센터", "전기료")]["state"] == "부족 예상" and st[("종합체육센터", "전기료")]["run_out"] and st[("문화예술회관", "전기료")]["state"] == "불용 예상")
+    yield "가스 고지 전 달은 예측으로 채움(9월 가스)", any(m["billed_missing"] for m in st[("종합체육센터", "가스료")]["months_fc"]) and st[("종합체육센터", "가스료")]["state"] == "적정"
+    yield f"전용 검토안 {len(cur['moves'])}건", cur["moves"] and cur["moves"][0]["to"] == "종합체육센터 전기료" and cur["moves"][0]["amount"] >= 1_000_000
+    yield f"다음 달({nm['ym']}) 요금 예측", nm["ym"] == "2026-10" and len(nm["rows"]) == 5 and all(r["cost"] > 0 for r in nm["rows"])
+    yield (f"내년 편성 {ny['totals']['request']:,}원(천원 단위), 유가 연동 가스 {ny['oil']['gas_change_pct']}%",
+           ny["fy"] == 2027 and all(i["request"] % 1000 == 0 for i in ny["items"]) and ny["oil"]["has"] and ny["oil"]["gas_change_pct"] > 0 and ny["totals"]["risk"] > 0)
+    b2 = c.call("GET", "/api/budget?save_pct=5&elec_up_pct=3")
+    yield "편성 가정 바꾸기(절감 5%·전기요금 3%)", b2["next_year"]["totals"]["request"] != ny["totals"]["request"] and b2["params"]["save_pct"] == 5
+    yield "예산 질문(부족)", "부족" in c.call("POST", "/api/ask", {"q": "올해 예산 모자라는 곳 있어?"})["answer"]
+    yield "예산 질문(내년 편성)", "2027" in c.call("POST", "/api/ask", {"q": "내년 예산 얼마 잡아야 해?"})["answer"]
+    d = c.call("POST", "/api/budget/report?fmt=hwpx", {"save_pct": 0}, raw=True)
+    yield "예산 문서(집행 관리·편성 근거, hwpx)", d[:2] == b"PK" and len(d) > 2000
     fid = s["findings"][0]["id"]
     d = c.call("POST", f"/api/findings/{fid}/request?fmt=hwpx", {}, raw=True)
     yield "점검 요청서", d[:2] == b"PK"
@@ -98,7 +115,7 @@ def checks(c):
     yield "올리기 경로 제한", c.status("POST", "/api/upload", {"files": [{"path": "../../x.exe", "b64": "AA=="}]}) == 400
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
-    yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 11
+    yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13
 
 
 def _sheets(data):
