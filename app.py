@@ -275,6 +275,14 @@ def upload(req):
     files = (req.json or {}).get("files") or []
     if not files:
         raise HttpError(400, "올릴 파일이 없습니다")
+    fac = str((req.json or {}).get("fac") or "").strip()
+    if fac:
+        try:
+            safe_parts(fac)
+        except ValueError:
+            raise HttpError(400, "시설 이름에 쓸 수 없는 글자가 있습니다")
+        if "/" in fac or "\\" in fac:
+            raise HttpError(400, "시설 이름에 쓸 수 없는 글자가 있습니다")
     saved = []
     for f in files:
         try:
@@ -283,13 +291,37 @@ def upload(req):
             continue
         if Path(parts[-1]).suffix.lower() not in SUPPORTED:
             raise HttpError(400, f"읽을 수 없는 형식입니다: {parts[-1]} (엑셀·PDF·한글·워드·CSV)")
-        dst = SRC.joinpath("올린 자료", *parts)
+        dst = SRC.joinpath(ingest.FAC_DIR, fac, parts[-1]) if fac else SRC.joinpath("올린 자료", *parts)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(base64.b64decode(f["b64"]))
         saved.append("/".join(parts))
-    log("자료 올리기", ", ".join(saved))
+    log("자료 올리기", (f"[{fac}] " if fac else "") + ", ".join(saved))
     rebuild()
     return get_state(req)
+
+
+@app.get("/api/coverage")
+def coverage(req):
+    """시설별로 달마다 전기·가스 자료가 어디서 왔는지(고지서·글자 인식·엑셀·없음)."""
+    a = an()
+    ds = a.ds
+    months = []
+    if a.months:
+        ym = ingest.ym_add(a.months[-1], -23)
+        while ym <= a.months[-1]:
+            months.append(ym)
+            ym = ingest.ym_add(ym, 1)
+    rows = []
+    for fac in ds.facilities:
+        r = {"fac": fac, "elec": [], "gas": []}
+        for kind, table in (("elec", ds.elec), ("gas", ds.gas)):
+            for ym in months:
+                x = table.get((fac, ym))
+                r[kind].append(None if not x else "ocr" if x.get("ocr") else "bill" if x.get("from_bill") else "table")
+        r["files"] = sorted({d["file"] for d in ds.files if ingest.folder_fac(d["file"]) == fac})
+        rows.append(r)
+    from core import ocr
+    return {"months": months, "rows": rows, "ocr": ocr.status()}
 
 
 @app.post("/api/reset")

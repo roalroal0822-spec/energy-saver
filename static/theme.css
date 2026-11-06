@@ -286,3 +286,16 @@ body:not(.admin) .admin-only { display: none !important; }
 .segs .seg { border: 0; background: none; border-radius: 99px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
 .segs .seg.on { background: var(--accent); color: #fff; }
 .icon-btn { border: 0; background: none; font-size: 18px; color: var(--faint); cursor: pointer; padding: 2px 8px; }
+
+/* 시설별 자료 채움 표 */
+.cov-grid { display: grid; gap: 3px; min-width: 760px; }
+.cov-row { display: grid; grid-template-columns: 120px 40px repeat(24, 1fr); gap: 3px; align-items: center; cursor: pointer; border-radius: 6px; padding: 1px 4px; }
+.cov-row.on { background: var(--accent-soft); }
+.cov-head { cursor: default; }
+.cov-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cov-k, .cov-m { font-size: 11px; color: var(--muted); }
+.cov { display: block; height: 14px; border-radius: 3px; }
+.cov.none { background: transparent; border: 1px dashed var(--line-strong); }
+.cov-legend { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
+.cov-legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.cov-legend i.none { border: 1px dashed var(--line-strong); }

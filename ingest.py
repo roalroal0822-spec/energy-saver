@@ -292,22 +292,27 @@ def read_tables(ds, docs):
 
 # ------------------------------------------------------------ 고지서 PDF
 
-BILL = {
-    "ym": r"(20\d{2})\s*년\s*(\d{1,2})\s*월\s*분|사용기간\s*(20\d{2})[.\-](\d{2})",
-    "fac": r"고객명\s*(.+)",
-    "contract": r"계약전력\s*([\d,]+)\s*kW",
-    "applied": r"요금적용전력\s*([\d,]+)\s*kW",
-    "peak": r"최대수요전력\s*([\d,]+)\s*kW",
-    "off": r"경부하[^\d]*([\d,]+)\s*kWh",
-    "mid": r"중간부하[^\d]*([\d,]+)\s*kWh",
-    "on": r"최대부하[^\d]*([\d,]+)\s*kWh",
-    "kwh": r"사용전력량[^\d]*([\d,]+)\s*kWh",
-    "pf": r"역률\s*([\d.]+)\s*%",
-    "basic": r"기본요금\s*([\d,]+)\s*원",
-    "energy": r"전력량요금\s*([\d,]+)\s*원",
-    "pfc": r"역률요금\s*([\d,]+)\s*원",
-    "vat": r"부가가치세\s*([\d,]+)\s*원",
-    "total": r"청구금액\s*([\d,]+)\s*원",
+BILL = {  # 항목마다 (모의 고지서 형식, 한국전력 전기요금 청구서 형식) 순서로 찾는다
+    "ym": [r"(20\d{2})\s*년\s*(\d{1,2})\s*월\s*분|사용기간\s*(20\d{2})[.\-](\d{2})",
+           r"고객님의\s*(20\d{2})\s*년\s*(\d{1,2})(?!\d)"],
+    "fac": [r"고객명\s*(.+)", r"상\s*호\s+(\S+)"],
+    "tariff": [r"계약종별\s*(\S+)"],
+    "contract": [r"계약전력\s*([\d,]+)\s*kW"],
+    "applied": [r"요금적용전력\s*([\d,]+)\s*kW"],
+    "peak": [r"최대수요전력\s*([\d,]+)\s*kW"],
+    "off": [r"경부하[^\d]*([\d,]+)\s*kWh"],
+    "mid": [r"중간부하[^\d]*([\d,]+)\s*kWh"],
+    "on": [r"최대부하[^\d]*([\d,]+)\s*kWh"],
+    "kwh": [r"사용전력량[^\d]*([\d,]+)\s*kWh", r"최대수요전력[\s\S]*?(\d[\d,]*)\s*kWh", r"(?i)(?<![\d.,])(\d[\d,]{2,})\s*kwh"],
+    "pf": [r"역률\s*([\d.]+)\s*%", r"(?m)^\s*역률\s+(\d{2,3}(?:\.\d+)?)\s*$"],
+    "basic": [r"기본요금\s*([\d,]+)\s*원", r"기본\s*요금\s*([\d,]+)"],
+    "energy": [r"전력량요금\s*([\d,]+)\s*원", r"전력량요금\s*([\d,]+)"],
+    "climate": [r"기후환경요금\s*(-?[\d,]+)"],
+    "fuel": [r"연료비조정액\s*(-?[\d,]+)"],
+    "pfc": [r"역률요금\s*([\d,]+)\s*원", r"역률\s*요금\s*(-?[\d,]+)"],
+    "vat": [r"부가가치세\s*([\d,]+)\s*원", r"부가가치세\s*([\d,]+)"],
+    "fund": [r"전력\s*기금\s*([\d,]+)"],
+    "total": [r"청구금액\s*([\d,]+)\s*원", r"수신료\s*[\d,]+\s+([\d,]+)", r"당월요금계\s*([\d,]+)"],
 }
 NEED = ("ym", "fac", "kwh", "total")
 
@@ -317,24 +322,58 @@ def _is_bill(doc):
     return doc.ext == ".pdf" and ("kWh" in t or "kwh" in t.lower()) and re.search(r"청구|고지|요금", t)
 
 
+def _kepco_fac(text):
+    """한전 청구서는 '상호' 글자가 본문에 안 남아, 주소 다음 줄의 상호(시설 이름)를 꺼낸다."""
+    lines = [x.strip() for x in text.splitlines()]
+    for i, ln in enumerate(lines):
+        if re.match(r"\S+(특별시|광역시|특별자치시|특별자치도|도)\s", ln) and i + 1 < len(lines):
+            j = i
+            if "(" in ln and ")" not in ln:  # 주소가 다음 줄로 이어짐
+                while j + 1 < len(lines) and ")" not in lines[j]:
+                    j += 1
+            for k in range(j + 1, min(j + 4, len(lines))):
+                if lines[k] and len(lines[k]) <= 30 and not re.search(r"\d{4}\s*년|까지|~", lines[k]):
+                    return lines[k]
+            break
+    return None
+
+
 def parse_bill(doc, ds, llm=None):
     """고지서 한 장 → 전력 기록 1건. (기록, 못 읽은 항목, 모델 사용 여부)"""
     blocks = doc.blocks
+    flat = re.sub(r"[\u3000\xa0]", " ", doc.text)
     rec, srcs = {}, {}
-    for key, rx in BILL.items():
-        for b in blocks:
-            m = re.search(rx, b.text)
-            if not m:
-                continue
-            if key == "ym":
-                g = [x for x in m.groups() if x]
-                rec["ym"] = f"{int(g[0])}-{int(g[1]):02d}"
-            elif key == "fac":
-                rec["fac"] = m.group(1).strip()
-            else:
-                rec[key] = _num(m.group(1))
-            srcs[key] = b.cite()
-            break
+
+    def put(key, m):
+        if key == "ym":
+            g = [x for x in m.groups() if x]
+            rec["ym"] = f"{int(g[0])}-{int(g[1]):02d}"
+        elif key in ("fac", "tariff"):
+            rec[key] = m.group(1).strip()
+        else:
+            rec[key] = _num(m.group(1))
+
+    for key, rxs in BILL.items():
+        for rx in rxs:
+            hit = next(((b, m) for b in blocks for m in [re.search(rx, re.sub(r"[\u3000\xa0]", " ", b.text))] if m), None)
+            if hit:
+                put(key, hit[1])
+                srcs[key] = hit[0].cite()
+                break
+            m = re.search(rx, flat)  # 줄이 나뉜 항목(예: '2026년 10\n월')은 전체 글에서
+            if m:
+                put(key, m)
+                srcs[key] = {"file": doc.relpath, "loc": "1쪽", "quote": re.sub(r"\s+", " ", m.group(0))[:160]}
+                break
+    if "fac" not in rec and "고객님의" in flat:  # 한국전력 청구서
+        f = _kepco_fac(doc.text)
+        if f:
+            rec["fac"] = f
+            srcs["fac"] = {"file": doc.relpath, "loc": "1쪽 상호", "quote": f}
+    if "고객님의" in flat and "ym" in rec:
+        per = re.search(r"(\d{2})\.(\d{2})\s*~\s*(\d{2})\.(\d{2})", flat)
+        if per:
+            rec["period"] = f"{per.group(1)}.{per.group(2)}~{per.group(3)}.{per.group(4)}"
     missing = [k for k in NEED if k not in rec]
     by_model = []
     if missing and llm is not None and llm.enabled:
@@ -363,23 +402,42 @@ def parse_bill(doc, ds, llm=None):
     return rec, srcs, missing, by_model
 
 
+FAC_DIR = "시설별 자료"
+
+
+def folder_fac(relpath):
+    m = re.search(rf"(?:^|/){FAC_DIR}/([^/]+)/", relpath.replace("\\", "/"))
+    return m.group(1) if m else None
+
+
 def read_bills(ds, docs, llm=None):
     out = []
     for doc in docs:
         if not _is_bill(doc):
             continue
         rec, srcs, missing, by_model = parse_bill(doc, ds, llm)
-        item = {"file": doc.relpath, "fields": {k: v for k, v in rec.items()}, "missing": missing, "by_model": by_model}
+        folder = folder_fac(doc.relpath)
+        if folder:  # '시설별 자료'에서 시설을 골라 넣은 고지서는 그 시설로(고지서의 상호와 달라도)
+            if rec.get("fac") and rec["fac"] != folder:
+                srcs["fac_bill"] = srcs.get("fac")
+            rec["fac"] = folder
+            srcs["fac"] = {"file": doc.relpath, "loc": "시설별 자료", "quote": f"넣을 때 고른 시설: {folder}"}
+            missing = [k for k in missing if k != "fac"]
+        ocr = any("글자 인식" in (v or {}).get("loc", "") for v in srcs.values())
+        if ocr and not missing:
+            ds.warnings.append(f"{doc.name}: 스캔본을 글자 인식(OCR)으로 읽었습니다. 사용량·금액을 원본과 대조해 주세요")
+        item = {"file": doc.relpath, "fields": {k: v for k, v in rec.items()}, "missing": missing, "by_model": by_model, "ocr": ocr}
         if missing:
             ds.warnings.append(f"{doc.name}: 고지서에서 {', '.join(missing)} 항목을 찾지 못해 넣지 않았습니다")
         else:
-            fac = ds.fac_name(rec["fac"].replace("공공기관", "").strip())
+            fac = folder or ds.fac_name(rec["fac"].replace("공공기관", "").strip())
             item["fac"] = fac
             data = {k: rec.get(k) for k in ("contract", "applied", "peak", "off", "mid", "on", "kwh", "pf",
-                                            "basic", "energy", "pfc", "vat", "total")}
+                                            "basic", "energy", "pfc", "vat", "total", "climate", "fuel", "fund", "tariff", "period")}
             data["src"] = srcs.get("kwh") or {"file": doc.relpath, "loc": "", "quote": ""}
             data["srcs"] = srcs
             data["from_bill"] = True
+            data["ocr"] = ocr
             ds.put(ds.elec, (fac, rec["ym"]), data)
         out.append(item)
         ds.files.append({"file": doc.relpath, "kind": "고지서(PDF)", "rows": 0 if missing else 1})

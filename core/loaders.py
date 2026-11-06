@@ -344,6 +344,12 @@ def _read_pdf(data, name):
             t = _clean(line)
             if t:
                 out.append((f"p.{pno} {li}줄", t))
+    if sum(len(t) for _, t in out) < 30:  # 글자가 거의 없으면 스캔(이미지) PDF로 보고 글자 인식
+        from .ocr import pdf_lines
+        got = pdf_lines(data)
+        if got is None:
+            raise ValueError("스캔(이미지) PDF입니다. 글자 인식 프로그램(Tesseract OCR, 한국어)이 설치되어 있으면 자동으로 읽습니다")
+        out = got
     return out, []
 
 

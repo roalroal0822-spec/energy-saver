@@ -313,18 +313,23 @@ function renderReport() {
 }
 
 // ------------------------------------------------------------ 자료
+function dropZone(text, onFiles) {
+  const drop = el("div", { class: "drop" }, text, " ",
+    el("label", { style: { color: "var(--brand)", cursor: "pointer" } }, "파일 선택", el("input", { type: "file", multiple: true, hidden: true, onchange: e => onFiles([...e.target.files]) })));
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", async e => { e.preventDefault(); drop.classList.remove("over"); onFiles(await filesFromDrop(e)); });
+  return drop;
+}
+
+let FAC_UP = "";
 function renderData() {
   const box = $("#tab-data"), d = S.data;
   box.innerHTML = "";
-  const drop = el("div", { class: "drop" }, "엑셀(전력·가스 내역, 시설 현황, 기온, 조치 이력), 고지서 PDF, 지침(한글)을 여기에 끌어다 놓거나 ",
-    el("label", { style: { color: "var(--brand)", cursor: "pointer" } }, "파일 선택", el("input", { type: "file", multiple: true, hidden: true, onchange: e => up([...e.target.files]) })));
-  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
-  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", async e => { e.preventDefault(); drop.classList.remove("over"); up(await filesFromDrop(e)); });
-  async function up(files) {
+  async function up(files, fac) {
     if (!files.length) return;
-    toast("읽는 중…");
-    await load(await api("POST", "/api/upload", { files: await readFiles(files) }));
+    toast(fac ? `${fac} 자료 읽는 중…` : "읽는 중…");
+    await load(await api("POST", "/api/upload", { files: await readFiles(files), fac: fac || "" }));
     toast("반영했습니다");
   }
   const bills = el("button", { class: "primary", onclick: async () => {
@@ -333,11 +338,16 @@ function renderData() {
     finally { busy(bills, false); }
   } }, "시연: 9월 고지서 PDF 5장 넣기");
   box.append(el("div", { class: "panel" }, el("h2", {}, "자료 넣기"),
-    el("p", { class: "small muted" }, "표는 열 이름으로 알아봅니다(열 순서가 달라도 됨). 원본 파일은 읽기만 하고, 이 PC의 작업 폴더(data)에 복사본을 둡니다."),
-    drop,
-    el("div", { class: "row", style: { marginTop: "12px" } }, bills,
+    el("p", { class: "small muted" }, "원본 파일은 읽기만 하고, 이 PC의 작업 폴더(data)에 복사본을 둡니다. 기관 전체 자료는 ① 통합 자료에, 시설마다 오는 고지서는 ② 시설별 자료에 넣으세요."),
+    el("h3", { style: { marginTop: "18px" } }, "① 통합 자료"),
+    el("p", { class: "small muted" }, "여러 시설이 한 표에 들어 있는 자료: 전력·가스 사용 내역(엑셀), 시설 현황, 기온, 조치 이력, 공공요금 예산서, 국제유가, 에너지 절약 지침(한글). 표는 열 이름으로 알아봅니다(열 순서가 달라도 됨)."),
+    dropZone("통합 자료를 여기에 끌어다 놓거나", f => up(f, "")),
+    el("div", { class: "row", style: { marginTop: "12px" } },
       el("button", { onclick: async () => { await load(await api("POST", "/api/sample", { reset: true })); toast("모의자료(8월까지)로 되돌렸습니다"); } }, "모의자료 처음 상태로"),
       el("button", { class: "danger", onclick: async () => { await load(await api("POST", "/api/reset")); } }, "자료 모두 비우기"))));
+  const facPanel = el("div", { class: "panel", id: "fac-data" }, el("span", { class: "spinner" }));
+  box.append(facPanel);
+  renderFacData(facPanel, up, bills);
   box.append(kmaPanel(S.kma || {}));
   box.append(el("div", { class: "panel" }, el("h3", {}, `읽은 자료 (${d.months.length ? d.months[0] + " ~ " + d.months[1] : "없음"})`),
     el("p", { class: "small" }, `시설 ${d.facilities}곳 · 전력 ${d.elec}건 · 가스 ${d.gas}건 · 기온 ${d.weather}개월 · 조치 ${d.actions}건`),
@@ -350,7 +360,7 @@ function renderData() {
     el("table", { class: "t" }, el("tr", {}, ["파일", "시설", "연월", "사용전력량", "청구금액", "역률", "읽기"].map(h => el("th", {}, h))),
       S.bills.map(b => el("tr", {}, el("td", {}, shortName(b.file)), el("td", {}, b.fac || b.fields.fac || ""), el("td", {}, b.fields.ym || ""),
         el("td", {}, num(b.fields.kwh, "kWh")), el("td", {}, won(b.fields.total)), el("td", {}, b.fields.pf ? b.fields.pf + "%" : ""),
-        el("td", {}, b.missing.length ? el("span", { class: "tag bad" }, "못 읽음: " + b.missing.join(", ")) : el("span", { class: "tag ok" }, b.by_model.length ? "규칙+모델" : "규칙")))))));
+        el("td", {}, b.missing.length ? el("span", { class: "tag bad" }, "못 읽음: " + b.missing.join(", ")) : b.ocr ? el("span", { class: "tag warn", title: "스캔본을 글자 인식으로 읽었습니다. 숫자를 원본과 대조하세요" }, "글자 인식 · 원본 대조") : el("span", { class: "tag ok" }, b.by_model.length ? "규칙+모델" : "규칙")))))));
   box.append(el("div", { class: "panel" }, el("h3", {}, "점검 기준"),
     el("p", { class: "small muted" }, "기준값은 넣은 지침의 조문에서 읽습니다. 지침을 고쳐 다시 넣으면 기준이 바뀝니다. 지침에 없는 값은 기본값을 씁니다."),
     el("table", { class: "t" }, el("tr", {}, ["기준", "값", "근거"].map(h => el("th", {}, h))),
@@ -753,4 +763,35 @@ async function renderBudgetInput() {
       el("button", { onclick: () => download("/api/budget/template", { fy: d.fy }) }, "예산서 양식(엑셀)"), reset, save)));
   totalCell.textContent = "합계";
   draw();
+}
+
+// ------------------------------------------------------------ 시설별 자료(시설을 골라 고지서 넣기 + 달별 채움 표)
+const COV = { bill: ["고지서", "var(--accent-strong)"], ocr: ["고지서(글자 인식)", "#d9a441"], table: ["엑셀 내역", "#a9a39b"] };
+async function renderFacData(box, up, bills) {
+  let c;
+  try { c = await api("GET", "/api/coverage"); } catch (e) { box.replaceChildren(); return; }
+  const facs = c.rows.map(r => r.fac);
+  if (!FAC_UP || !facs.includes(FAC_UP)) FAC_UP = facs[0] || "";
+  const sel = el("select", { onchange: e => { FAC_UP = e.target.value; renderFacData(box, up, bills); } }, ...facs.map(f => el("option", { value: f, selected: f === FAC_UP }, f)));
+  const newFac = el("input", { placeholder: "새 시설 이름", style: { width: "150px" } });
+  const addFac = el("button", { onclick: () => { const v = newFac.value.trim(); if (!v) return; FAC_UP = v; if (!facs.includes(v)) { sel.append(el("option", { value: v, selected: true }, v)); } sel.value = v; toast(`'${v}'을(를) 골랐습니다. 이 시설의 고지서를 넣으면 시설이 추가됩니다`); } }, "추가");
+  const ocrLine = c.ocr.ok ? el("span", { class: "tag ok" }, "스캔본 글자 인식 사용 가능(Tesseract OCR)") : el("span", { class: "tag gray", title: c.ocr.note }, "스캔본 글자 인식 꺼짐: " + c.ocr.note);
+  const cell = (st, ym, fac, kind) => el("span", { class: "cov" + (st ? "" : " none"), style: st ? { background: COV[st][1] } : {}, title: `${fac} ${kind === "elec" ? "전기" : "가스"} ${ym}: ${st ? COV[st][0] : "자료 없음"}` });
+  const grid = el("div", { class: "cov-grid" },
+    el("div", { class: "cov-row cov-head" }, el("span", { class: "cov-name" }), el("span", { class: "cov-k" }),
+      ...c.months.map((m, i) => el("span", { class: "cov-m" }, i % 3 === 0 ? ymLabel(m) : ""))),
+    ...c.rows.flatMap(r => ["elec", "gas"].map((k, j) => el("div", { class: "cov-row" + (r.fac === FAC_UP ? " on" : ""), onclick: () => { FAC_UP = r.fac; renderFacData(box, up, bills); } },
+      el("span", { class: "cov-name" }, j === 0 ? r.fac : ""), el("span", { class: "cov-k" }, k === "elec" ? "전기" : "가스"),
+      ...r[k].map((st, i) => cell(st, c.months[i], r.fac, k))))));
+  const mine = c.rows.find(r => r.fac === FAC_UP);
+  box.replaceChildren(
+    el("h3", {}, "② 시설별 자료"),
+    el("p", { class: "small muted" }, "시설을 고르고 그 시설의 고지서 PDF(스캔본 포함)를 넣으세요. 고지서의 상호가 시설 이름과 달라도 고른 시설로 들어갑니다. 아래 표에서 달마다 자료가 채워졌는지 확인합니다."),
+    el("div", { class: "row", style: { gap: "8px", flexWrap: "wrap", margin: "8px 0 12px" } }, el("b", {}, "시설"), sel, el("span", { class: "small muted" }, "또는"), newFac, addFac, el("span", { style: { flex: 1 } }), ocrLine),
+    dropZone(`${FAC_UP || "시설"}의 고지서 PDF·엑셀을 여기에 끌어다 놓거나`, f => up(f, FAC_UP)),
+    mine && mine.files.length ? el("p", { class: "small muted", style: { marginTop: "8px" } }, `${FAC_UP}에 넣은 파일: ${mine.files.map(shortName).join(", ")}`) : null,
+    el("div", { class: "row", style: { marginTop: "12px" } }, bills),
+    el("h3", { style: { marginTop: "22px" } }, "달별 자료 채움"),
+    el("div", { class: "cov-legend small muted" }, ...Object.values(COV).map(([t, col]) => el("span", {}, el("i", { style: { background: col } }), t)), el("span", {}, el("i", { class: "none" }), "자료 없음")),
+    el("div", { class: "tbl-scroll" }, grid));
 }

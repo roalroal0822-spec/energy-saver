@@ -118,6 +118,21 @@ def checks(c):
     pq = c.call("POST", "/api/ask", {"q": "담당 010-1234-5678 체육센터 8월 전기 왜 늘었어?"})
     yield "질문의 개인정보 가림", pq["masked"] == ["휴대전화"] and "010-1234" not in str(c.call("GET", "/api/log"))
     yield "다른 사이트 요청 차단", c.status("POST", "/api/reset", {}, {"Origin": "http://evil.example"}) == 403
+    pdf = (ROOT / "sample_data" / "고지서" / "전기요금_복지관_2026-09.pdf").read_bytes()
+    fu = c.call("POST", "/api/upload", {"fac": "새 별관", "files": [{"path": "별관_9월.pdf", "b64": base64.b64encode(pdf).decode()}]})
+    nb = next((b for b in fu["bills"] if "새 별관" in b["file"]), None)
+    cov = c.call("GET", "/api/coverage")
+    yield "시설별 자료: 고른 시설로 고지서 넣기·달별 채움 표", nb and nb["fac"] == "새 별관" and not nb["missing"] and any(r["fac"] == "새 별관" and "bill" in r["elec"] for r in cov["rows"])
+    import ingest as I
+
+    class _D:
+        relpath, name, ext = "kepco.pdf", "kepco.pdf", ".pdf"
+        text = ("○○공단 고객님의 2026년 10\n월\n행정센터\n2026년 11월 05일까지\n 09.05 ~ 10.04 일까지\n기본\u3000요금 1,000,000\n전력량요금 2,000,000\n"
+                "역률\u3000요금 -10,000\n부가가치세 300,000\n당월요금계 3,300,000\nＴＶ수신료 2,500\n3,302,500\n계약종별 일반용(갑)저압\n역률 100\n"
+                "계약전력 220 kW\n최대수요전력 64 kW\n1304.81\n12345 kWh\n23456 kWh")
+        blocks = []
+    rec, _, miss, _ = I.parse_bill(_D(), I.Dataset())
+    yield "한국전력 청구서 형식 읽기(연월·사용량·청구금액·역률요금)", (rec.get("ym"), rec.get("kwh"), rec.get("total"), rec.get("pfc"), miss) == ("2026-10", 12345, 3302500, -10000, ["fac"])
     yield "올리기 경로 제한", c.status("POST", "/api/upload", {"files": [{"path": "../../x.exe", "b64": "AA=="}]}) == 400
     s0 = c.call("GET", "/api/state")
     k = c.call("POST", "/api/kma", {"on": True})
