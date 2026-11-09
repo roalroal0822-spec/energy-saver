@@ -711,7 +711,7 @@ function setupAdmin() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   setupAdmin();
-  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); renderKepco(); } });
+  GO = setupTabs(id => { if (id === "budget") renderBudget(); if (id === "invest") renderInvest(); if (id === "log") renderLog(); if (id === "about") renderAbout(); if (id === "fac" && S) { renderFac(); renderWeather(); renderKepco(); } });
   $("#fac-sel").addEventListener("change", renderFac);
   setupPeriod();
   $("#kind-sel").addEventListener("change", renderFac);
@@ -1280,4 +1280,150 @@ function yoyChart(rows) {
   });
   return el("div", {}, svgBox(W, H, g), el("div", { class: "small muted wx-legend" },
     el("span", {}, el("i", { style: { background: "var(--accent-strong)" } }), "우리 시설 전체"), el("span", {}, el("i", { style: { background: "#7d8ea8" } }), "지역 일반용(한전 통계)")));
+}
+
+// ------------------------------------------------------------ 투자 효과(할까 말까 · 해 보니 어땠나 · 언제 할까)
+let INV = null, INVFAC = "";
+const LVC = { good: "ok", warn: "warn", bad: "bad", gray: "gray" };
+
+// 누적 절감(선)과 순투자(점선)를 그려 손익분기를 보여 준다. rows: [{ym, invest, saved}]
+function paybackChart(rows, opt = {}) {
+  const W = opt.W || 1100, H = opt.H || 240, L = 64, R = 20, T = 14, B = 28;
+  const mx = Math.max(...rows.map(r => Math.max(r.invest, r.saved)), 1) * 1.08;
+  const x = i => L + i * (W - L - R) / Math.max(rows.length - 1, 1), y = v => T + (H - T - B) * (1 - v / mx);
+  let s = "";
+  for (let i = 0; i <= 4; i++) { const v = mx * i / 4; s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#ece6dc"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${man(v)}</text>`; }
+  const every = Math.ceil(rows.length / 12);
+  rows.forEach((r, i) => { if (i % every === 0) s += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${r.ym.length > 4 ? r.ym.slice(2).replace("-", ".") : r.ym}</text>`; });
+  const path = k => rows.map((r, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(r[k]).toFixed(1)}`).join("");
+  s += `<path d="${path("invest")}" fill="none" stroke="#7a6c5d" stroke-width="2" stroke-dasharray="5 4"/>`;
+  s += `<path d="${path("saved")}" fill="none" stroke="#d97a1c" stroke-width="3"/>`;
+  const be = rows.findIndex((r, i) => i > 0 && r.invest > 0 && r.saved >= r.invest && rows.slice(i).every(q => q.saved >= q.invest));
+  if (be > 0) s += `<line x1="${x(be)}" x2="${x(be)}" y1="${T}" y2="${H - B}" stroke="#2e7d4f" stroke-dasharray="3 3"/><circle cx="${x(be)}" cy="${y(rows[be].saved)}" r="5" fill="#2e7d4f"/>`
+    + `<text x="${x(be) + 8}" y="${T + 14}" style="fill:#2e7d4f;font-weight:700">손익분기 ${rows[be].ym}</text>`;
+  return el("div", { class: "viz-c" }, el("div", { html: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="누적 절감액과 순투자 비교">${s}</svg>` }),
+    el("div", { class: "lg small" }, el("span", {}, el("i", { style: { background: "#d97a1c" } }), " 누적 절감액"), " ",
+      el("span", {}, el("i", { style: { background: "#7a6c5d" } }), " 순투자(투자비−지원금)")));
+}
+
+// 사업 하나의 수명 동안 누적(연 단위)
+function planCurve(p) {
+  const rows = [];
+  for (let yv = 0; yv <= p.life; yv++) rows.push({ ym: yv + "년", invest: p.net, saved: p.save_won * yv });
+  return rows;
+}
+
+async function renderInvest() {
+  const box = $("#tab-invest");
+  if (!INV) box.replaceChildren(el("div", { class: "panel" }, el("span", { class: "spinner" }), " 계산 중"));
+  INV = await api("GET", "/api/invest");
+  const r = INV, rm = r.roadmap;
+  const facs = [...new Set(r.plans.map(p => p.fac))];
+  const plans = r.plans.filter(p => !p.done && (!INVFAC || p.fac === INVFAC));
+  const aiBox = el("div", { class: "ai-text" }, r.ai ? r.ai.text : "");
+  const aiMode = el("div", { class: "small muted" }, r.ai ? r.ai.mode + (r.ai.dropped ? " · " + r.ai.dropped : "") : "");
+  const aiBtn = el("button", { class: "primary", onclick: async () => {
+    busy(aiBtn, true, "분석 중");
+    try { const x = await api("POST", "/api/invest/ai"); aiBox.textContent = x.text; aiMode.textContent = x.mode + (x.dropped ? " · " + x.dropped : ""); }
+    finally { busy(aiBtn, false); }
+  } }, S && S.llm ? "AI 종합 분석" : "종합 분석(규칙)");
+  const head = el("div", { class: "panel" },
+    el("div", { class: "row" }, el("div", { style: { flex: 1 } }, el("h2", { style: { margin: 0 } }, "투자 효과 분석"),
+      el("p", { class: "tagline", style: { margin: "2px 0 0" } }, "할까 말까, 해 보니 어땠나, 언제 할까")), aiBtn),
+    el("p", { class: "small muted" }, "LED·인버터(동력비)·보일러(가스비)·페이퍼리스 사업을 시설마다 계산합니다. 절감액은 이 기관의 최근 12개월 사용량과 단가로, 지원금·절감률·단가·수명은 아래 가정값으로 계산하고 '추진·조건부·ESG 검토·보류'로 판정합니다. 이미 한 사업은 시행 전후 기온 보정 비교로 실제 회수 기간을 따집니다."),
+    el("div", { class: "row" }, Object.entries(r.counts).map(([k, v]) => el("span", { class: "tag " + ({ "추진": "ok", "조건부": "warn", "ESG 검토": "warn", "사후 확인 먼저": "warn", "보류": "bad" }[k] || "gray") }, `${k} ${v}건`)),
+      rm.steps.length ? el("span", { class: "small muted" }, ` · 추진 일정 ${rm.steps.length}건, 순투자 ${man(rm.total_net)}, 연 절감 ${man(rm.total_save)}, 온실가스 연 ${rm.total_co2}t 감축, 전체 손익분기 ${rm.breakeven || "계산 기간 밖"}`) : null),
+    aiBox, aiMode,
+    el("div", { class: "row", style: { marginTop: "10px" } }, el("span", { class: "small muted" }, "투자 효과 분석 보고서:"), exportButtons("/api/invest/report")));
+
+  // 0. 놓치고 있는 것(점검표)
+  const gp = r.gaps, SC = { "하고 있음": "ok", "일부": "warn", "안 함": "bad" };
+  const gaps = el("div", { class: "panel", id: "inv-gaps" }, el("h2", {}, "놓치고 있는 것: 사업장 설비 점검표로 보기"),
+    el("p", { class: "small muted" }, "시설마다 하고 있는 절감 설비·운영을 점검표로 넣으면, 이미 하고 있는 것은 빼고 안 하거나 일부만 한 것을 절감액 순으로 추천합니다. 일부만 했으면 남은 몫만 계산합니다."),
+    el("div", { class: "row" }, el("button", { onclick: () => download("/api/invest/checklist-template", {}) }, "점검표 양식(엑셀)"),
+      el("span", { class: "small muted" }, "채워서 '자료 넣기'에 올리면 됩니다.")),
+    gp.has ? [
+      el("div", { class: "tbl-scroll", style: { marginTop: "10px" } }, el("table", { class: "t chk-m" },
+        el("tr", {}, el("th", {}, "시설"), gp.names.map(n => el("th", { class: "small" }, n))),
+        gp.matrix.map(m => el("tr", {}, el("td", {}, m.fac), m.cells.map(c => el("td", {}, c ? el("span", { class: "tag " + (SC[c.state] || "gray") }, c.state === "일부" && c.pct != null ? `일부 ${c.pct}%` : c.state) : el("span", { class: "muted" }, "-"))))))),
+      el("h3", {}, `놓친 것 ${gp.items.length}건 (절감액 순)`),
+      el("div", { class: "tbl-scroll" }, el("table", { class: "t" }, el("tr", {}, ["시설", "점검 항목", "현황", "할 일", "연 절감(추정)", "비용", "판정", "계산"].map(h => el("th", {}, h))),
+        gp.items.map(g => el("tr", {}, el("td", {}, g.fac), el("td", {}, g.item), el("td", {}, el("span", { class: "tag " + (SC[g.state] || "gray") }, g.state + (g.state === "일부" && g.pct != null ? ` ${g.pct}%` : ""))),
+          el("td", {}, g.title), el("td", {}, g.save_won ? man(g.save_won) : "-"), el("td", { class: "small" }, g.cost),
+          el("td", {}, el("span", { class: "tag " + (LVC[g.level] || "gray") }, g.verdict)), el("td", { class: "small muted" }, g.how, g.src ? [" ", citeChips([g.src])] : null))))),
+      el("p", { class: "small muted" }, gp.note)] : el("p", { class: "q" }, gp.note));
+
+  // 1. 할까 말까
+  const detail = el("div", { id: "inv-detail" });
+  const pre = el("div", { class: "panel", id: "inv-plan" }, el("h2", {}, "1. 할까 말까: 사업별 사전 판단"),
+    el("div", { class: "row" }, el("span", { class: "small muted" }, "시설:"),
+      el("select", { "aria-label": "시설 고르기", onchange: e => { INVFAC = e.target.value; renderInvest(); } }, el("option", { value: "" }, "전체"),
+        facs.map(f => el("option", { value: f, selected: f === INVFAC }, f)))),
+    el("div", { class: "tbl-scroll" }, el("table", { class: "t" },
+      el("tr", {}, ["시설", "사업", "연 절감액", "순투자(지원금)", "회수", "수명 순이익", "온실가스", "판정", ""].map(h => el("th", {}, h))),
+      plans.map(p => el("tr", {},
+        el("td", {}, p.fac), el("td", {}, p.name, el("div", { class: "small muted" }, p.check || "")), el("td", {}, man(p.save_won)), el("td", {}, `${man(p.net)} (${man(p.subsidy)})`),
+        el("td", {}, `${p.payback_y}년`), el("td", {}, man(p.npv)), el("td", {}, `${p.co2_t}t/년`),
+        el("td", {}, el("span", { class: "tag " + LVC[p.level] }, p.verdict)),
+        el("td", {}, el("button", { class: "small inv-open", onclick: () => showPlan(p, detail) }, "근거")))))),
+    detail,
+    el("p", { class: "small muted" }, `판정: 수명 절반 안에 회수하고 순이익이 남으면 추진, 수명 안에 회수하면 조건부, 회수 못 해도 온실가스 연 10t 이상이면 ESG 검토, 그 밖은 보류. 순이익은 할인율 ${r.params.discount}%로 수명 동안 현재가치입니다.`));
+
+  // 2. 해 보니 어땠나
+  const post = el("div", { class: "panel", id: "inv-review" }, el("h2", {}, "2. 해 보니 어땠나: 시행한 사업 사후 평가"),
+    el("p", { class: "small muted" }, "조치 이력에 투자비·지원금을 적으면, 시행 전 기준선(기온 보정)과 시행 뒤 실제 사용량의 차이로 실제 절감액과 회수 기간을 계산합니다. 휴관 달은 뺍니다."),
+    r.reviews.length ? r.reviews.map(v => el("div", { class: "inv-rv " + (LVC[v.level] || "gray") },
+      el("div", { class: "row" }, el("b", { style: { flex: 1 } }, `${v.fac} · ${v.title}`), el("span", { class: "small muted" }, `${v.date} 시행`),
+        el("span", { class: "tag " + (LVC[v.level] || "gray") }, v.verdict)),
+      v.saved_pct != null ? el("div", { class: "inv-kpis" },
+        el("div", {}, el("small", {}, "실측 절감"), el("b", {}, `${v.saved_pct}%`), el("small", {}, v.pre_pct != null ? `사전 예상 ${v.pre_pct}%` : "")),
+        el("div", {}, el("small", {}, "연 절감액(실측)"), el("b", {}, man(v.annual_won)), el("small", {}, `${v.period} · ${v.months}개월`)),
+        el("div", {}, el("small", {}, "순투자"), el("b", {}, man(v.net)), el("small", {}, v.subsidy ? `지원금 ${man(v.subsidy)}` : "지원금 없음")),
+        el("div", {}, el("small", {}, "회수 기간"), el("b", {}, v.payback_y ? `${v.payback_y}년` : "-"), el("small", {}, v.breakeven ? `손익분기 ${v.breakeven}` : "")),
+        el("div", {}, el("small", {}, "지금까지 회수"), el("b", {}, v.recovered_pct != null ? `${v.recovered_pct}%` : "-"), el("small", {}, `온실가스 ${v.co2_t}t`))) : null,
+      el("p", { class: "small" }, v.why))) : el("p", { class: "muted" }, "완료한 조치가 없습니다. '절감 조치·효과'에서 조치를 등록하세요."));
+
+  // 3. 언제 할까
+  const plan3 = el("div", { class: "panel", id: "inv-road" }, el("h2", {}, "3. 언제 할까: 추진 일정"),
+    rm.steps.length ? [el("p", { class: "small muted" }, rm.rule + "."),
+      el("div", { class: "tbl-scroll" }, el("table", { class: "t" }, el("tr", {}, ["시행 월", "시설", "사업", "순투자", "연 절감액", "회수", "온실가스", "시기"].map(h => el("th", {}, h))),
+        rm.steps.map(s => el("tr", {}, el("td", {}, s.ym), el("td", {}, s.fac), el("td", {}, s.name), el("td", {}, man(s.net)), el("td", {}, man(s.save_won)),
+          el("td", {}, `${s.payback_y}년`), el("td", {}, `${s.co2_t}t`), el("td", { class: "small muted" }, s.why_month))))),
+      el("h3", {}, "일정대로 하면: 누적 순투자와 누적 절감액"), paybackChart(rm.curve)] : el("p", { class: "muted" }, "추진·조건부 사업이 없습니다."));
+
+  // 가정값
+  const keys = Object.keys(r.measures);
+  const inputs = {};
+  const asum = el("div", { class: "panel", id: "inv-assume" }, el("h2", {}, "계산 가정(기관 값으로 바꾸기)"),
+    el("p", { class: "small muted" }, r.note),
+    el("div", { class: "tbl-scroll" }, el("table", { class: "t" }, el("tr", {}, ["사업", "절감률(%)", "단가(원)", "수명(년)", "지원율(%)", "지원사업(참고)", "설명"].map(h => el("th", {}, h))),
+      keys.map(k => { const m = r.measures[k]; inputs[k] = {};
+        const inp = (f, v) => (inputs[k][f] = el("input", { type: "number", value: v, style: { width: "90px" }, "aria-label": `${m.name} ${f}` }));
+        return el("tr", {}, el("td", {}, m.name), el("td", {}, inp("rate", Math.round(m.rate * 100))),
+          el("td", {}, inp("cost", m.cost), el("span", { class: "small muted" }, "/" + { area: "㎡", contract: "kW", fac: "시설" }[m.basis])),
+          el("td", {}, inp("life", m.life)), el("td", {}, inp("subsidy", Math.round(m.subsidy * 100))),
+          el("td", { class: "small" }, m.subsidy_name || "-"), el("td", { class: "small muted" }, m.note)); }))),
+    el("div", { class: "row", style: { marginTop: "10px" } },
+      el("button", { class: "primary", onclick: async () => {
+        const set = {};
+        keys.forEach(k => { set[k] = { rate: inputs[k].rate.value / 100, cost: inputs[k].cost.value, life: inputs[k].life.value, subsidy: inputs[k].subsidy.value / 100 }; });
+        await api("POST", "/api/invest/assume", { set }); INV = null; await renderInvest(); toast("가정값을 바꿔 다시 계산했습니다");
+      } }, "바꾼 값으로 다시 계산"),
+      el("button", { onclick: async () => { await api("POST", "/api/invest/assume", { reset: true }); INV = null; await renderInvest(); toast("기본 가정값으로 되돌렸습니다"); } }, "기본값으로")));
+  box.replaceChildren(head, gaps, pre, post, plan3, asum);
+}
+
+function showPlan(p, box) {
+  box.replaceChildren(el("div", { class: "inv-plan-detail" },
+    el("div", { class: "row" }, el("h3", { style: { flex: 1, margin: 0 } }, `${p.fac} · ${p.name}`), el("span", { class: "tag " + LVC[p.level] }, p.verdict)),
+    el("p", {}, p.why),
+    el("div", { class: "inv-kpis" },
+      el("div", {}, el("small", {}, "연 절감"), el("b", {}, man(p.save_won)), el("small", {}, `${p.save_qty.toLocaleString("ko-KR")}${p.u}`)),
+      el("div", {}, el("small", {}, "투자비"), el("b", {}, man(p.cost)), el("small", {}, p.cost_formula)),
+      el("div", {}, el("small", {}, "지원금(가정)"), el("b", {}, man(p.subsidy)), el("small", {}, `${Math.round(p.subsidy_rate * 100)}% · ${p.subsidy_name || "없음"}`)),
+      el("div", {}, el("small", {}, "손익분기"), el("b", {}, `${p.payback_m}개월`), el("small", {}, `수명 ${p.life}년`)),
+      el("div", {}, el("small", {}, "온실가스·ESG"), el("b", {}, `${p.co2_t}t/년`), el("small", {}, `사회적 가치 ${man(p.social_won)}/년(참고)`))),
+    el("div", { class: "reason" }, "계산식: " + p.formula), el("div", { class: "reason" }, "가정: " + p.note),
+    paybackChart(planCurve(p), { H: 200 })));
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }

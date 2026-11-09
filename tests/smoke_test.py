@@ -197,9 +197,26 @@ def checks(c):
     yield "추천을 조치로 등록하면 '등록됨'으로 바뀌고 합계에서 빠짐", next(x for x in rc2["items"] if x["key"] == "냉방" and x["fac"] == cool["fac"])["registered"] and rc2["totals"]["save_won"] < rc["totals"]["save_won"]
     ai = c.call("POST", "/api/recommend/ai", {})
     yield "추천 순서 요약(규칙 기반)", ai["text"].startswith("먼저 할 일") and ai["mode"]
+    iv = c.call("GET", "/api/invest")
+    yield "투자 효과: 사업별 회수 기간·수명 순이익·판정", len(iv["plans"]) > 5 and all(p["verdict"] for p in iv["plans"]) and iv["roadmap"]["steps"]
+    yield "점검표에서 이미 하고 있는 것(복지관 LED)은 놓친 것에서 빠짐", iv["gaps"]["has"] and not any(g["fac"] == "복지관" and "LED" in g["item"] for g in iv["gaps"]["items"])
+    rv = {v["fac"]: v for v in iv["reviews"]}
+    yield "사후 평가: 효과 있는 LED와 효과 미흡 LED를 가름", rv["문화예술회관"]["verdict"] == "효과 있음" and rv["본부 청사"]["verdict"] == "효과 미흡"
+    yield "효과 미흡 사업의 같은 종류 다음 단계는 '사후 확인 먼저'", any(p["fac"] == "본부 청사" and p["key"] == "led" and p["verdict"] == "사후 확인 먼저" for p in iv["plans"])
+    ai = c.call("POST", "/api/invest/ai", {})
+    yield "투자 효과 종합 분석(규칙 기반)", ai["text"].startswith("먼저 할 사업")
+    try:
+        c.call("POST", "/api/invest/assume", {"set": {"led": {"rate": 5}}})
+        bad = False
+    except Exception:
+        bad = True
+    iv2 = c.call("POST", "/api/invest/assume", {"set": {"led": {"subsidy": 0.6}}})
+    led = lambda d: sorted(p["net"] for p in d["plans"] if p["key"] == "led")
+    yield "가정값 범위 검사·지원율 바꾸면 순투자 줄어듦", bad and led(iv2) < led(iv)
+    c.call("POST", "/api/invest/assume", {"reset": True})
     r = c.call("POST", "/api/reset", {})
     yield "자료 비우기 후에도 동작", r["overview"]["latest"] is None and r["findings"] == []
-    yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 13
+    yield "원본 보호(sample_data 파일 수 그대로)", sum(1 for p in (ROOT / "sample_data").rglob("*") if p.is_file()) == 14
 
 
 def kepco_checks(c, fk):

@@ -399,3 +399,16 @@ body:not(.admin) .admin-only { display: none !important; }
 @media (max-width: 900px) { .viz-grid { grid-template-columns: 1fr; } .donut-wrap { flex-direction: column; } }
 .ht-card svg rect, .ht-card svg text, .viz svg rect, .viz svg text, .viz svg path { stroke: none !important; }
 .ht-card svg text, .viz svg text { font-weight: 500; }
+
+/* 투자 효과 */
+.inv-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 10px 0; }
+.inv-kpis > div { background: var(--soft, #faf6ef); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.inv-kpis small { color: var(--muted); font-size: 12px; }
+.inv-kpis b { font-size: 20px; }
+.inv-rv { border: 1px solid var(--line, #ece6dc); border-left: 4px solid var(--muted); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
+.inv-rv.ok { border-left-color: var(--ok); } .inv-rv.warn { border-left-color: var(--warn); } .inv-rv.bad { border-left-color: var(--bad); }
+.inv-plan-detail { border: 1px solid var(--line, #ece6dc); border-radius: 12px; padding: 14px; margin-top: 12px; }
+#tab-invest .viz-c svg { width: 100%; height: auto; }
+#tab-invest .viz-c svg text { font-size: 12px; fill: #7a6c5d; }
+#tab-invest svg path, #tab-invest svg line, #tab-invest svg circle { vector-effect: non-scaling-stroke; }
+.chk-m th { white-space: normal; min-width: 70px; font-size: 12px; } .chk-m td { text-align: center; } .chk-m td:first-child { text-align: left; white-space: nowrap; }

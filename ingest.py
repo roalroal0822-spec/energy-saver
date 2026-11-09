@@ -39,6 +39,12 @@ COLS = {
     "date": [r"시행일|완료일|일자"],
     "status": [r"상태"],
     "owner": [r"^담당$|담당자"],
+    "cost": [r"투자비|사업비"],
+    "subsidy": [r"지원금|보조금"],
+    "check_item": [r"점검항목|^항목$"],
+    "check_state": [r"이행현황|이행여부|^현황$"],
+    "check_pct": [r"이행률|적용률|전환율"],
+    "check_note": [r"^비고$|확인내용"],
 }
 
 
@@ -101,6 +107,8 @@ def _kind_of(cols, name):
         return "elec"
     if "ym" in cols and "fac" in cols and "m3" in cols:
         return "gas"
+    if "fac" in cols and "check_item" in cols and "check_state" in cols:
+        return "checklist"
     if "fac" in cols and ("area" in cols or "contract" in cols) and "ym" not in cols:
         return "facility"
     if "fac" in cols and "title" in cols and "date" in cols:
@@ -117,6 +125,7 @@ class Dataset:
         self.elec = {}  # (시설, ym) → {...}
         self.gas = {}
         self.actions = []
+        self.checklist = []  # 사업장 설비 점검표 [{"fac","item","state","pct","note","src"}]
         self.guide = None  # (Regulation, 문서)
         self.budget = []  # [{"fy","fac","item","main","supp","transfer","note","src"}] 예산서
         self.oil = {}  # ym → {"oil","fx","kind","src"} 국제유가·환율
@@ -234,7 +243,7 @@ def read_tables(ds, docs):
             if kind:
                 pending.append((kind, doc, t))
     # 시설 현황을 먼저 읽어야 다른 표의 시설 이름을 맞출 수 있다
-    order = {"facility": 0, "weather": 1, "elec": 2, "gas": 3, "action": 4}
+    order = {"facility": 0, "weather": 1, "elec": 2, "gas": 3, "action": 4, "checklist": 5}
     for kind, doc, t in sorted(pending, key=lambda x: order[x[0]]):
         n = 0
         for cols, get, loc, quote in _rows(doc, t):
@@ -275,6 +284,17 @@ def read_tables(ds, docs):
                     if m3 is None:
                         continue
                     ds.put(ds.gas, (fac, ym), {"m3": m3, "total": _num(get("total")), "src": src})
+            elif kind == "checklist":
+                fac = ds.fac_name(get("fac"))
+                item = str(get("check_item") or "").strip()
+                st = str(get("check_state") or "").strip()
+                if fac and item:
+                    pct = _num(get("check_pct"))
+                    state = "일부" if re.search(r"일부|부분", st) else "안 함" if re.search(r"안\s*함|미|없음|^x$|아니", st, re.I) else \
+                        "하고 있음" if re.search(r"하고\s*있|완료|적용|^o$|^예$|^있음$", st, re.I) else (st or "모름")
+                    if pct is None:
+                        pct = {"하고 있음": 100, "일부": 50, "안 함": 0}.get(state)
+                    ds.checklist.append({"fac": fac, "item": item, "state": state, "pct": pct, "note": str(get("check_note") or "").strip(), "src": src})
             elif kind == "action":
                 fac = ds.fac_name(get("fac"))
                 d = re.search(r"20\d{2}-\d{2}-\d{2}", str(get("date") or ""))
@@ -282,10 +302,11 @@ def read_tables(ds, docs):
                     ds.actions.append({"id": f"A{len(ds.actions) + 1}", "fac": fac, "title": str(get("title") or "").strip(),
                                        "kind": str(get("kind") or "").strip(), "date": d.group(),
                                        "status": str(get("status") or "완료").strip(), "owner": str(get("owner") or "").strip(),
+                                       "cost": _num(get("cost")) or 0, "subsidy": _num(get("subsidy")) or 0,
                                        "src": src, "origin": "file"})
             n += 1
         ds.files.append({"file": doc.relpath, "kind": {"facility": "시설 현황", "weather": "기온", "elec": "전력 내역",
-                                                       "gas": "가스 내역", "action": "조치 이력"}[kind], "rows": n})
+                                                       "gas": "가스 내역", "action": "조치 이력", "checklist": "설비 점검표"}[kind], "rows": n})
     for doc, t in later:
         read_budget_oil(ds, doc, t)
 

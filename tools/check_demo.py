@@ -58,7 +58,7 @@ def run_once():
         got.append(("추천 절감 조치", "LED 교체 실측 효과(기온 보정)", "-8.2% · 52,134kWh · 751만 원 · 24tCO2eq",
                     f"-{e['saved_pct']:g}% · {e['saved_kwh']:,}kWh · {won(e['saved_won'])} 원 · {e['co2_t']:g}tCO2eq"))
         rc = c.call("GET", "/api/recommend")["totals"]
-        got.append(("추천 절감 조치", "추천 조치 수·예상 절감액·목표까지 남은 양", "11건 · 4,492만 원 · 218,595kWh",
+        got.append(("추천 절감 조치", "추천 조치 수·예상 절감액·목표까지 남은 양", "10건 · 4,492만 원 · 218,595kWh",
                     f"{rc['count']}건 · {won(rc['save_won'])} 원 · {rc['target_gap_kwh']:,}kWh"))
         ins = c.call("GET", "/api/insight")
         got.append(("외부 자료 종합 해석", "냉방도일·난방도일(최근 12개월)", "898.1 · 2609", f"{ins['weather']['cdd']:g} · {ins['weather']['hdd']:g}"))

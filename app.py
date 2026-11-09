@@ -19,6 +19,7 @@ from core.xlsx import CTYPE as XLSX, workbook
 
 import analysis
 import budget
+import invest
 import ingest
 import kepco
 import opinet
@@ -60,6 +61,7 @@ ABOUT = {
                  ("점검 6종", "초과 사용·가스·휴관 미정지·계약전력·역률·요금 재계산, 결과마다 근거와 계산식"),
                  ("예산 관리", "예산서(본예산·추경)와 고지 금액으로 집행률, 남은 달은 기온 보정 모델로 예측해 불용·부족 판정"),
                  ("내년 편성 근거", "평년 기온 × 최근 사용 수준 × 단가 전망(유가·환율 연동·요금 인상), 이상기온 여유분은 따로"),
+                 ("투자 효과(사전·사후)", "사업장 설비 점검표로 놓친 것만 골라, 사업별 절감액·지원금·회수 기간·수명 순이익·온실가스로 추진/조건부/보류 판정. 한 사업은 시행 전후 기온 보정 비교로 실제 회수 기간, 효과 미흡이면 같은 종류 다음 단계를 미룸, 월별 추진 일정"),
                  ("모델 보조(선택)", "못 읽은 고지서 칸, 답 문장 다듬기. 결과는 원문·사실과 대조"),
                  ("근거 카드", "답·보고서에 원본 행과 지침 조문 원문을 그대로 붙임")],
     "guards": ["판단(초과·미달·금액)은 모델이 하지 않고 계산으로만 합니다.",
@@ -161,7 +163,7 @@ def rebuild():
     apply_budget_input(ds)
     acts = ds.actions + user_actions()
     an = analysis.Analysis(ds, cfg, acts).run()
-    STATE.update(an=an, bills=bills, ds=ds, rec_ai=None, insight_ai=None)
+    STATE.update(an=an, bills=bills, ds=ds, rec_ai=None, insight_ai=None, invest_ai=None)
     return an
 
 
@@ -501,6 +503,13 @@ def insight_ai(req):
     return res
 
 
+def _money(v):
+    try:
+        return max(0, int(float(str(v or 0).replace(",", ""))))
+    except ValueError:
+        raise HttpError(400, "투자비·지원금은 숫자(원)로 입력하세요")
+
+
 @app.post("/api/actions")
 def add_action(req):
     b = req.json or {}
@@ -518,7 +527,8 @@ def add_action(req):
     acts = user_actions()
     item = {"id": "U" + uuid.uuid4().hex[:6], "fac": fac, "title": title, "kind": b.get("kind") or (f["type"] if f else ""),
             "date": d, "status": b.get("status") or "예정", "owner": b.get("owner") or (f["owner"] if f else ""),
-            "finding": f["title"] if f else "", "origin": "user", "src": None}
+            "finding": f["title"] if f else "", "origin": "user", "src": None,
+            "cost": _money(b.get("cost")), "subsidy": _money(b.get("subsidy"))}
     acts.append(item)
     store.write("actions.json", {"actions": acts})
     log("조치 등록", f"{fac} {title}")
@@ -537,6 +547,9 @@ def update_action(req):
             if b.get("date"):
                 date.fromisoformat(b["date"])
                 x["date"] = b["date"]
+            for k in ("cost", "subsidy"):
+                if k in b:
+                    x[k] = _money(b[k])
             store.write("actions.json", {"actions": acts})
             log("조치 상태 변경", f"{x['fac']} {x['title']} → {x['status']}")
             rebuild()
@@ -934,6 +947,145 @@ def budget_report(req):
     data, ctype = export(blocks, fmt)
     log("예산 문서 만들기", f"{cur['fy']} 집행 관리·{ny['fy']} 편성 근거")
     return file_response(data, f"공공요금예산_{cur['fy']}집행관리_{ny['fy']}편성근거.{fmt}", ctype)
+
+
+# ------------------------------------------------------------ 투자 효과 분석(할까 말까·해 보니 어땠나·언제 할까)
+
+def _inv():
+    return invest.Invest(an(), cfg, store.read("invest_assume.json", {}))
+
+
+@app.get("/api/invest")
+def get_invest(req):
+    r = _inv().run()
+    r["ai"] = STATE.get("invest_ai")
+    return r
+
+
+@app.post("/api/invest/assume")
+def invest_assume(req):
+    b = req.json or {}
+    if b.get("reset"):
+        store.write("invest_assume.json", {})
+    else:
+        cur = store.read("invest_assume.json", {})
+        lim = {"rate": (0, 1), "subsidy": (0, 1), "cost": (0, 10 ** 10), "life": (1, 40), "discount": (0, 20),
+               "carbon_price": (0, 10 ** 6), "year_budget": (0, 10 ** 12), "per_month": (1, 20), "co2_per_m3": (0, 10)}
+        for k, v in (b.get("set") or {}).items():
+            if k not in invest.MEASURES and k != "_":
+                continue
+            for kk, vv in (v or {}).items():
+                if kk not in lim:
+                    continue
+                try:
+                    x = float(vv)
+                except (TypeError, ValueError):
+                    raise HttpError(400, "가정값은 숫자로 입력하세요")
+                lo, hi = lim[kk]
+                if not lo <= x <= hi:
+                    raise HttpError(400, f"{kk} 값이 범위({lo}~{hi})를 벗어났습니다")
+                cur.setdefault(k, {})[kk] = x
+        store.write("invest_assume.json", cur)
+    STATE["invest_ai"] = None
+    log("투자 효과 가정값 변경", "처음 상태로" if b.get("reset") else ", ".join((b.get("set") or {}).keys()))
+    return get_invest(req)
+
+
+@app.post("/api/invest/checklist-template")
+def invest_checklist_template(req):
+    """사업장 설비 점검표 양식: 시설마다 점검 항목을 미리 채운다(지금 넣은 점검표가 있으면 그 값으로)."""
+    a = an()
+    items = ["조명 LED 전환", "펌프·공조기 인버터", "고효율(콘덴싱) 보일러", "전자결재·페이퍼리스", "대기전력 자동 차단",
+             "냉난방 설정온도(28℃/18℃) 관리", "야간·휴관 설비 정지 일정", "계약전력 적정성 점검", "창호 단열·차양", "태양광 발전 설비"]
+    have = {(c["fac"], c["item"]): c for c in a.ds.checklist}
+    rows = []
+    for f in a.ds.facilities:
+        for it in items:
+            c = have.get((f, it))
+            rows.append([f, it, c["state"] if c else "", c["pct"] if c else None, c["note"] if c else ""])
+    data = workbook([("점검표", ["시설명", "점검 항목", "이행 현황", "이행률(%)", "비고"], rows, [16, 32, 12, 10, 30])],
+                    note="한톨 사업장 설비 점검표: 이행 현황은 '하고 있음/일부/안 함'으로, 일부면 이행률(%)을 적고 '자료 넣기'에 올리세요. 이미 하고 있는 것은 추천에서 빠집니다.")
+    log("설비 점검표 양식 내려받기")
+    return file_response(data, "한톨_사업장설비점검표.xlsx", XLSX)
+
+
+@app.post("/api/invest/ai")
+def invest_ai(req):
+    iv = _inv()
+    r = iv.run()
+    facts = iv.facts(r)
+    good = [p for p in r["plans"] if not p["done"] and p["verdict"] == "추진"][:3]
+    bad = [v for v in r["reviews"] if v.get("verdict") in ("효과 미흡", "예상보다 낮음")]
+    rule = ("먼저 할 사업: " + "; ".join(f"{p['fac']} {p['name']}(회수 {p['payback_y']}년)" for p in good) + "." if good else "지금 바로 추진할 사업이 없습니다.") \
+        + ("".join(f" 사후 평가 결과 {v['fac']} {v['title']}: {v['verdict']}." for v in bad)) \
+        + (f" 추진 일정대로 하면 {r['roadmap']['steps'][0]['ym']}부터 시작해 전체 손익분기는 {r['roadmap']['breakeven']}입니다." if r["roadmap"].get("breakeven") else "")
+    res = qa.guard(llm, "공공기관 시설 에너지 담당자에게 에너지 절감 투자 판단을 한국어 5~7문장으로 설명하세요. "
+                        "할 사업과 미룰 사업, 이미 한 사업의 사후 평가에서 배울 점, 몇 개월에 걸쳐 어떤 순서로 하면 좋은지, 온실가스·ESG 효과를 말하세요. "
+                        "지원금 비율과 절감률은 가정값이라는 점을 밝히세요.", facts, rule, max_tokens=900)
+    STATE["invest_ai"] = res
+    log("투자 효과 AI 해설", res["mode"])
+    return res
+
+
+@app.post("/api/invest/report")
+def invest_report(req):
+    iv = _inv()
+    r = iv.run()
+    a = iv.a
+    pl = [p for p in r["plans"] if not p["done"]]
+    rm = r["roadmap"]
+    blocks = [("title", "에너지 절감 사업 투자 효과 분석(사전 판단·사후 평가·추진 일정)"),
+              ("p", f"작성일 {date.today().isoformat()} · 자료 기준 {a.latest} · 작성: 한톨(에너지 절감 비서), 계산 기반(가정값 표시)")]
+    sm = [f"검토 사업 {len(pl)}건: " + ", ".join(f"{k} {v}건" for k, v in r["counts"].items())]
+    if rm["steps"]:
+        sm.append(f"추진 일정 {len(rm['steps'])}건, 순투자 {_won(rm['total_net'])}원, 연 절감 {_won(rm['total_save'])}원, 온실가스 연 {rm['total_co2']}t 감축, 전체 손익분기 {rm.get('breakeven') or '계산 기간 밖'}")
+    for v in r["reviews"]:
+        if v.get("annual_won") is not None:
+            sm.append(f"사후 평가 {v['fac']} {v['title']}: {v['verdict']}(실측 절감 {v['saved_pct']}%" + (f", 회수 {v['payback_y']}년" if v.get("payback_y") else "") + ")")
+    blocks.append(("summary", sm))
+    ai = STATE.get("invest_ai")
+    if ai and ai.get("text"):
+        blocks += [("h2", "종합 의견" + (" (AI 작성, 숫자 대조 통과)" if ai["mode"] != "규칙 기반" else "")), ("p", ai["text"])]
+    gp = r["gaps"]
+    if gp["has"]:
+        blocks += [("h1", "0. 놓치고 있는 것(사업장 설비 점검표 기준)"),
+                   ("table", ["시설", "점검 항목", "이행 현황", "할 일", "연 절감(추정)", "비용", "판정"],
+                    [[g["fac"], g["item"], f"{g['state']}" + (f"({g['pct']:g}%)" if g.get("pct") is not None else ""), g["title"],
+                      _won(g.get("save_won")), g["cost"], g["verdict"]] for g in gp["items"]], [2, 3, 2, 4, 2, 2, 2]),
+                   ("note", "※ 이미 하고 있는 항목은 뺐습니다. " + gp["note"])]
+    blocks += [("h1", "1. 할까 말까: 사업별 사전 판단"),
+               ("table", ["시설", "사업", "연 절감액", "투자비", "지원금", "순투자", "회수(년)", "수명 순이익", "온실가스(t/년)", "판정"],
+                [[p["fac"], p["name"], _won(p["save_won"]), _won(p["cost"]), _won(p["subsidy"]), _won(p["net"]), p["payback_y"], _won(p["npv"]), p["co2_t"], p["verdict"]] for p in pl],
+                [2, 4, 2, 2, 2, 2, 1, 2, 1, 1]),
+               ("note", "※ 판정: 수명 절반 안에 회수·순이익이면 추진, 수명 안 회수면 조건부, 회수 못 해도 온실가스 연 10t 이상이면 ESG 검토, 그 밖은 보류. "
+                        f"순이익은 할인율 {r['params']['discount']}%로 수명 동안 현재가치. 사회적 가치(탄소 {r['params']['carbon_price']:,}원/t)는 판정에 넣지 않음."),
+               ("h2", "계산 가정")]
+    blocks.append(("table", ["사업", "절감률", "단가", "수명", "지원율", "지원사업(참고)", "설명"],
+                   [[m["name"], f"{m['rate']:.0%}", f"{m['cost']:,.0f}원/" + {"area": "㎡", "contract": "kW", "fac": "시설"}[m["basis"]], f"{m['life']:g}년",
+                     f"{m['subsidy']:.0%}", m["subsidy_name"], m["note"]] for m in r["measures"].values()], [3, 1, 2, 1, 1, 3, 4]))
+    blocks.append(("note", "※ " + r["note"]))
+    blocks.append(("h1", "2. 해 보니 어땠나: 시행한 사업 사후 평가"))
+    rows = []
+    for v in r["reviews"]:
+        rows.append([v["fac"], v["title"], v["date"], v.get("period", "-"), f"{v['saved_pct']}%" if v.get("saved_pct") is not None else "-",
+                     f"{v['pre_pct']}%" if v.get("pre_pct") is not None else "-", _won(v.get("annual_won")), _won(v["net"]),
+                     v.get("payback_y") or "-", v.get("breakeven") or "-", v["verdict"]])
+    blocks.append(("table", ["시설", "사업", "시행일", "측정 기간", "실측 절감", "사전 예상", "연 절감액", "순투자", "회수(년)", "손익분기", "판정"], rows,
+                   [2, 3, 2, 2, 1, 1, 2, 2, 1, 1, 2]))
+    for v in r["reviews"]:
+        blocks.append(("bullet", f"{v['fac']} {v['title']}: {v['why']}"))
+    blocks.append(("note", "※ 실측 절감은 휴관 달을 빼고, 시행 전 12개월로 맞춘 기온 보정 기준선과 시행 뒤 실제 사용량을 비교한 값입니다."))
+    if rm["steps"]:
+        blocks += [("h1", "3. 언제 할까: 추진 일정"),
+                   ("p", rm["rule"] + "."),
+                   ("table", ["시행 월", "시설", "사업", "순투자", "연 절감액", "회수(년)", "온실가스(t/년)", "시기 이유"],
+                    [[s["ym"], s["fac"], s["name"], _won(s["net"]), _won(s["save_won"]), s["payback_y"], s["co2_t"], s["why_month"]] for s in rm["steps"]],
+                    [2, 2, 4, 2, 2, 1, 1, 2]),
+                   ("p", f"모두 시행하면 누적 절감액이 누적 순투자를 넘는 달(전체 손익분기)은 {rm.get('breakeven') or '계산 기간 밖'}입니다.")]
+    fmt = req.query.get("fmt", "hwpx")
+    data, ctype = export(blocks, fmt)
+    log("투자 효과 분석 문서 만들기", fmt)
+    return file_response(data, f"에너지절감사업_투자효과분석.{fmt}", ctype)
 
 
 @app.post("/api/export-xlsx")
