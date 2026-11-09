@@ -153,6 +153,8 @@ function setupTabs(onChange) {
     const stick = () => nav.classList.toggle("stuck", nav.getBoundingClientRect().top <= 0 && window.scrollY > 0);
     window.addEventListener("scroll", stick, { passive: true }); stick();
   }
+  const mark = nav && el("div", { "aria-hidden": "true" });   // 탭 줄의 원래 위치(붙어 있을 때도 알 수 있게)
+  if (mark) nav.before(mark);
   let cur = -1;
   function moveInk() {
     const b = btns.find(x => x.classList.contains("on"));
@@ -164,7 +166,7 @@ function setupTabs(onChange) {
     const dir = cur < 0 ? "" : idx > cur ? "from-right" : idx < cur ? "from-left" : "";
     cur = idx;
     document.body.classList.toggle("on-home", idx === 0);
-    btns.forEach(b => b.classList.toggle("on", b.dataset.tab === id));
+    btns.forEach(b => { b.classList.toggle("on", b.dataset.tab === id); if (b.dataset.tab === id) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     moveInk();
     if (btns[idx] && btns[idx].scrollIntoView) btns[idx].scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
     $$("section.tab").forEach(s => {
@@ -172,13 +174,17 @@ function setupTabs(onChange) {
       s.hidden = s.id !== "tab-" + id;
       if (!s.hidden && dir) { void s.offsetWidth; s.classList.add(dir); }
     });
-    if (nav && dir && window.scrollY > nav.offsetTop) window.scrollTo({ top: nav.offsetTop, behavior: "smooth" });
+    if (mark && dir) { const top = mark.getBoundingClientRect().top + window.scrollY; if (window.scrollY > top) window.scrollTo({ top, behavior: "instant" }); }
     try { localStorage.setItem(location.pathname + ":tab", id); } catch (e) {}
+    if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
     onChange && onChange(id);
   }
   btns.forEach(b => b.addEventListener("click", () => go(b.dataset.tab)));
   let first = btns[0] && btns[0].dataset.tab;
   try { const saved = localStorage.getItem(location.pathname + ":tab"); if (saved && btns.some(b => b.dataset.tab === saved)) first = saved; } catch (e) {}
+  const fromHash = () => { const h = location.hash.slice(1); return btns.some(b => b.dataset.tab === h) ? h : null; };
+  first = fromHash() || first;
+  window.addEventListener("hashchange", () => { const h = fromHash(); if (h && btns[cur] && btns[cur].dataset.tab !== h) go(h); });
   if (first) go(first);
   return go;
 }
@@ -353,7 +359,29 @@ async function renderAbout(box) {
     mc && mc.models && mc.models.length ? el("table", { class: "t" }, el("tr", {}, ["모델", "결과", "시험 항목"].map(h => el("th", {}, h))),
       mc.models.map(m => el("tr", {}, el("td", {}, m.model), el("td", {}, `${m.passed}/${m.total}`),
         el("td", { class: "small" }, m.items.map(i => (i.ok ? "통과 " : "실패 ") + i.name).join(" · ")))))
-      : el("p", {}, "아직 실제 모델로 실측하지 않았습니다. 기관 PC에서 `모델검증.bat`(또는 `python tools/verify_models.py --models 모델1 모델2`)을 실행하면 여기와 화면 머리에 표시됩니다."),
+      : el("p", {}, "여러 모델을 바꿔 끼워 비교하는 시험은 아직 하지 않았습니다. 지금 연결된 모델은 그대로 쓰며, 모델이 쓴 문장은 숫자 대조를 거쳐야 화면에 나옵니다. 기관 PC에서 `모델검증.bat`(또는 `python tools/verify_models.py --models 모델1 모델2`)을 실행하면 여기와 화면 머리에 표시됩니다."),
     mc && mc.date ? el("p", { class: "small muted" }, `실측일 ${mc.date} · 연결 ${mc.provider}`) : null));
   if (a.data) box.append(el("div", { class: "panel" }, el("h2", {}, "자료와 개인정보"), el("ul", {}, a.data.map(d => el("li", {}, d)))));
 }
+
+// 입력칸과 이름표 연결(화면 읽기 프로그램용): 'label' 바로 뒤 입력칸에 for를 걸고,
+// 이름표가 없는 입력칸은 앞의 글자·placeholder·title로 aria-label을 단다(동적으로 그린 칸 포함).
+function linkLabels() {
+  $$("label:not([for])").forEach(l => {
+    if (l.querySelector("input,select,textarea")) return;
+    const nx = l.nextElementSibling;
+    const c = nx && (nx.matches("input,select,textarea") ? nx : nx.querySelector("input,select,textarea"));
+    if (c) { if (!c.id) c.id = "f" + Math.random().toString(36).slice(2, 8); l.htmlFor = c.id; }
+  });
+  $$("input:not([type=hidden]):not([aria-label]),select:not([aria-label]),textarea:not([aria-label])").forEach(c => {
+    if ((c.id && document.querySelector('label[for="' + c.id + '"]')) || c.closest("label")) return;
+    const prev = c.previousElementSibling;
+    const t = (prev && !prev.matches("input,select,textarea,button") && prev.textContent.trim()) || c.placeholder || c.title || "";
+    if (t) c.setAttribute("aria-label", t.replace(/[:：]\s*$/, "").slice(0, 60));
+  });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  linkLabels();
+  let tm = null;
+  new MutationObserver(() => { clearTimeout(tm); tm = setTimeout(linkLabels, 150); }).observe(document.body, { childList: true, subtree: true });
+});

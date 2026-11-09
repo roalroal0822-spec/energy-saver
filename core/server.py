@@ -101,7 +101,9 @@ class App:
                 ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
                 if ctype.startswith("text/") or ctype in ("application/javascript",):
                     ctype += "; charset=utf-8"
-                return Response(target.read_bytes(), 200, ctype)
+                # 글꼴·그림은 바뀌지 않으니 브라우저가 1주일 동안 다시 받지 않게 한다
+                keep = {"Cache-Control": "public, max-age=604800"} if rel.startswith(("fonts/", "img/")) else {}
+                return Response(target.read_bytes(), 200, ctype, keep)
         return None
 
     @staticmethod
@@ -156,18 +158,24 @@ class App:
         app = self
 
         class Handler(BaseHTTPRequestHandler):
-            def _do(self):
+            def _do(self, head=False):
                 res = app.handle(self)
                 self.send_response(res.status)
                 self.send_header("Content-Type", res.ctype)
                 self.send_header("Content-Length", str(len(res.body)))
-                self.send_header("Cache-Control", "no-store")
+                if "Cache-Control" not in res.headers:
+                    self.send_header("Cache-Control", "no-store")
                 for k, v in res.headers.items():
                     self.send_header(k, v)
                 self.end_headers()
-                self.wfile.write(res.body)
+                if not head:
+                    self.wfile.write(res.body)
 
             do_GET = do_POST = do_DELETE = do_PUT = _do
+
+            def do_HEAD(self):  # 상태 확인용 HEAD 요청: GET과 같은 머리말만 보낸다
+                self.command = "GET"
+                self._do(head=True)
 
             def log_message(self, fmt, *args):
                 if args and str(args[1])[:1] in "45":
