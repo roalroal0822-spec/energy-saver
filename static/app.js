@@ -9,7 +9,7 @@ const LV = { bad: "조치 필요", warn: "검토", gray: "설정 확인" };
 
 async function load(data) {
   S = data || await api("GET", "/api/state");
-  renderHome(); renderFind(); renderFacSel(); renderPeriod(); renderAct(); renderReport(); renderData();
+  renderHome(); heroCard(); renderFind(); renderFacSel(); renderPeriod(); renderAct(); renderReport(); renderData();
   BUD = null;
   if (!$("#tab-budget").hidden) renderBudget();
   if (!$("#tab-fac").hidden) { renderWeather(); renderKepco(); }
@@ -32,6 +32,91 @@ function spark(values) {
   return s;
 }
 
+
+// ------------------------------------------------------------ 도표(첫 화면 카드·한눈에 보기)
+const PAL = ["#c4610c", "#e8963a", "#f3c27a", "#8c5a32", "#6f8f7a"];
+const svgEl = (vb, inner, cls) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("viewBox", vb); s.setAttribute("class", cls || "chart"); s.innerHTML = inner; return s; };
+function monthTotals(o) {  // 시설별 최근 12개월 전기(kWh) → 달별 합계·시설별 값
+  const n = Math.max(...o.facilities.map(f => f.spark.length));
+  const months = [];
+  const [y, m] = o.recent[1].split("-").map(Number);
+  for (let i = n - 1; i >= 0; i--) { const d = new Date(y, m - 1 - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+  return { months, per: o.facilities.map(f => ({ name: f.name, v: Array.from({ length: n }, (_, i) => f.spark[i - (n - f.spark.length)] || 0) })) };
+}
+function stackedBars(o, W = 640, H = 250) {
+  const { months, per } = monthTotals(o);
+  const tot = months.map((_, i) => per.reduce((a, f) => a + f.v[i], 0)), mx = Math.max(...tot) * 1.08;
+  const L = 52, B = 26, T = 24, bw = (W - L - 8) / months.length, y = v => H - B - (v / mx) * (H - B - T);
+  let g = "";
+  for (let k = 0; k <= 3; k++) { const v = mx * k / 3; g += `<line x1="${L}" x2="${W - 8}" y1="${y(v)}" y2="${y(v)}" stroke="#efe6da"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${Math.round(v / 1000)}</text>`; }
+  months.forEach((ym, i) => {
+    let acc = 0;
+    per.forEach((f, j) => { const v = f.v[i]; g += `<rect x="${L + i * bw + bw * .16}" y="${y(acc + v)}" width="${bw * .68}" height="${Math.max(0, y(acc) - y(acc + v))}" fill="${PAL[j % PAL.length]}"><title>${ym} ${esc(f.name)} ${Math.round(v).toLocaleString("ko-KR")}kWh</title></rect>`; acc += v; });
+    g += `<text x="${L + i * bw + bw / 2}" y="${H - 8}" text-anchor="middle">${+ym.slice(5)}월</text>`;
+  });
+  g += `<text x="${L - 6}" y="12" text-anchor="end">MWh</text>`;
+  return svgEl(`0 0 ${W} ${H}`, g);
+}
+function donut(items, size = 200, label = "") {
+  const tot = items.reduce((a, x) => a + x.v, 0) || 1, R = size / 2 - 8, r = R * .62, c = size / 2;
+  let a0 = -Math.PI / 2, g = "";
+  items.forEach((x, j) => {
+    const a1 = a0 + (x.v / tot) * Math.PI * 2, big = a1 - a0 > Math.PI ? 1 : 0, p = (a, rr) => `${c + rr * Math.cos(a)},${c + rr * Math.sin(a)}`;
+    g += `<path d="M${p(a0, R)} A${R},${R} 0 ${big} 1 ${p(a1, R)} L${p(a1, r)} A${r},${r} 0 ${big} 0 ${p(a0, r)}Z" fill="${PAL[j % PAL.length]}"><title>${esc(x.name)} ${(x.v / tot * 100).toFixed(1)}%</title></path>`;
+    a0 = a1;
+  });
+  g += `<text x="${c}" y="${c - 2}" text-anchor="middle" style="font-size:17px;font-weight:800;fill:#2f241b">${label}</text><text x="${c}" y="${c + 18}" text-anchor="middle">최근 12개월</text>`;
+  return svgEl(`0 0 ${size} ${size}`, g, "chart donut");
+}
+function legend(items) {
+  const tot = items.reduce((a, x) => a + x.v, 0) || 1;
+  return el("div", { class: "lg" }, ...items.map((x, j) => el("div", {}, el("i", { style: { background: PAL[j % PAL.length] } }), el("span", {}, x.name), el("b", {}, (x.v / tot * 100).toFixed(1) + "%"))));
+}
+function hbars(rows, W = 520, L = 168, RP = 70) {
+  const mx = Math.max(...rows.map(r => r.v)) || 1, rowH = 34, H = rows.length * rowH + 4;
+  let g = "";
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4, w = Math.max(3, (r.v / mx) * (W - L - RP));
+    g += `<text x="${L - 10}" y="${y + 18}" text-anchor="end" style="fill:#2f241b">${esc(r.name)}</text><rect x="${L}" y="${y + 5}" width="${w}" height="18" rx="5" fill="${r.color || PAL[0]}"/><text x="${L + w + 6}" y="${y + 18}" style="fill:#2f241b;font-weight:700">${r.label}</text>`;
+  });
+  return svgEl(`0 0 ${W} ${H}`, g);
+}
+const KIND = { gas_excess: "가스 초과 사용", excess: "전기 초과 사용", closure: "휴관 중 사용", bill: "요금 차이", contract: "계약전력 과다", pf: "역률 요금", base: "기본요금" };
+function heroCard() {
+  const box = $("#ht-card");
+  if (!box) return;
+  const o = S.overview;
+  if (!o.latest) { box.hidden = true; return; }
+  const { months, per } = monthTotals(o);
+  const tot = months.map((_, i) => per.reduce((a, f) => a + f.v[i], 0)), mx = Math.max(...tot);
+  const W = 300, H = 92, bw = W / tot.length;
+  const bars = tot.map((v, i) => `<rect x="${i * bw + bw * .18}" y="${H - (v / mx) * (H - 6)}" width="${bw * .64}" height="${(v / mx) * (H - 6)}" rx="3" fill="${v === mx ? "#c4610c" : "#f0b46a"}"/>`).join("");
+  const t = o.totals, tg = o.target;
+  box.replaceChildren(
+    el("div", { class: "hc-h" }, el("b", {}, "최근 12개월 에너지 흐름"), el("span", {}, "월별 전기 사용")),
+    svgEl(`0 0 ${W} ${H + 16}`, bars + tot.map((v, i) => i % 3 === 0 ? `<text x="${i * bw + bw / 2}" y="${H + 13}" text-anchor="middle">${+months[i].slice(5)}월</text>` : "").join(""), "hc-chart"),
+    el("div", { class: "hc-k" },
+      el("div", {}, el("b", {}, num(t.amount / 1e4) + "만원"), el("span", {}, "찾은 금액(추정)")),
+      el("div", {}, el("b", {}, t.findings + "건"), el("span", {}, "점검 기준 초과")),
+      tg ? el("div", {}, el("b", { class: tg.change_pct > 0 ? "up" : "down" }, pct(tg.change_pct)), el("span", {}, "기온 보정 변화")) : null));
+  box.hidden = false;
+}
+function visualPanel(o) {
+  const byKind = {};
+  for (const f of S.findings) if (f.amount) byKind[KIND[f.type] || f.type] = (byKind[KIND[f.type] || f.type] || 0) + f.amount;
+  const rows = Object.entries(byKind).map(([name, v]) => ({ name, v, label: num(v / 1e4) + "만" })).sort((a, b) => b.v - a.v);
+  return el("div", { class: "panel viz" },
+    el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "에너지 사용 한눈에"), el("span", { class: "tagline" }, "작은 한 톨부터 차곡차곡, 모두를 위한 에너지 절약")),
+    el("div", { class: "viz-grid" },
+      el("div", { class: "viz-c wide" }, el("h4", {}, "월별 전기 사용량(시설별 쌓기)"), stackedBars(o),
+        el("div", { class: "lg inline" }, ...o.facilities.map((f, j) => el("div", {}, el("i", { style: { background: PAL[j % PAL.length] } }), el("span", {}, f.name))))),
+      el("div", { class: "viz-c" }, el("h4", {}, "시설별 전기 사용 비중"), el("div", { class: "donut-wrap" }, donut(o.facilities.map(f => ({ name: f.name, v: f.kwh })), 190, num(o.totals.kwh / 1000) + "MWh"),
+        legend(o.facilities.map(f => ({ name: f.name, v: f.kwh }))))),
+      rows.length ? el("div", { class: "viz-c wide" }, el("h4", {}, `찾은 금액 ${num(o.totals.amount / 1e4)}만원, 어디서 새고 있나(점검 유형별)`), hbars(rows, 640)) : null,
+      el("div", { class: "viz-c" }, el("h4", {}, "전년 대비 변화(기온 보정 전·후)"), hbars(o.facilities.map((f, j) => ({ name: f.name, v: Math.abs(f.norm_pct) + .2, label: `${pct(f.change_pct)} → ${pct(f.norm_pct)}`, color: f.norm_pct > 0 ? "#d7263d" : "#5f9a72" })), 420, 96, 130),
+        el("p", { class: "small muted", style: { margin: "4px 0 0" } }, "막대 길이는 기온 보정 후 변화 크기, 빨강은 늘어남·초록은 줄어듦"))));
+}
+
 // ------------------------------------------------------------ 한눈에 보기
 function renderHome() {
   const o = S.overview, t = o.totals, box = $("#tab-home");
@@ -51,6 +136,7 @@ function renderHome() {
       el("div", { class: "stat hl" }, el("b", {}, num(t.amount / 1e4) + "만"), el("span", { class: "lbl" }, "찾은 금액(원, 추정)"))),
     el("div", { class: "flow" }, "흐름:", el("b", {}, "고지서·내역 넣기"), "→", el("b", {}, "기온 보정 진단"), "→", el("b", {}, "점검 요청서"), "→", el("b", {}, "조치 등록"), "→", el("b", {}, "효과 측정·보고"))));
 
+  box.append(visualPanel(o));
   if (o.target) box.append(targetPanel(o.target));
   if (S.budget && S.budget.totals) box.append(budgetBrief(S.budget));
   if (o.outlook && o.outlook.rows.length) box.append(outlookPanel(o.outlook));
@@ -255,7 +341,7 @@ function actionForm(f) {
 function renderAct() {
   const box = $("#tab-act");
   box.innerHTML = "";
-  box.append(el("div", { class: "panel" }, el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "절감 조치 이행·효과"),
+  box.append(el("div", { class: "panel" }, el("div", { class: "row" }, el("h2", { style: { flex: 1, margin: 0 } }, "절감 조치 이행·효과", el("span", { class: "tagline" }, "에너지 다이어트의 시작, '한톨'과 함께하세요")),
     el("button", { class: "primary", onclick: () => actionForm(null) }, "조치 직접 등록")),
     el("p", { class: "small muted" }, "효과는 시행 전 기준선(기온 보정)과 시행 후 실제를 비교해 계산합니다. 휴관한 달은 빼고, 지침에 정한 기간 이상 쌓이면 '효과 확인'으로 바뀝니다.")));
   const rec = el("div", { id: "rec" });
@@ -321,7 +407,7 @@ async function ask(q) {
 function renderReport() {
   const box = $("#tab-report");
   box.innerHTML = "";
-  box.append(el("div", { class: "panel" }, el("h2", {}, "에너지 사용 점검 보고서"),
+  box.append(el("div", { class: "panel" }, el("h2", {}, "에너지 사용 점검 보고서", el("span", { class: "tagline" }, "지구를 살리는 작지만 확실한 습관, 한 톨 절약")),
     el("p", {}, "총평, 시설별 현황, 점검 결과(근거 조문·계산식), 절감 조치 이행·효과, 점검 기준을 한 문서로 만듭니다. '한눈에 보기'에서 AI 총평을 쓴 경우 그 총평이 들어갑니다."),
     el("div", { class: "row" }, el("span", { class: "small muted" }, "바로 내려받기:"), exportButtons("/api/report"),
       el("span", { style: { flex: 1 } }), el("button", { class: "primary", onclick: () => openReportEditor() }, "미리보기·고쳐서 내려받기"))));

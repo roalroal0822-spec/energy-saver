@@ -43,6 +43,15 @@ def run_once():
         got.append(("1. 한눈에 보기", "넣은 내역 기간", "24개월", f"{len(s['months'])}개월"))
         got.append(("1. 한눈에 보기", "읽은 9월 고지서 PDF", "5장", f"{len([b for b in s['bills'] if not b['missing']])}장"))
         got.append(("1. 한눈에 보기 · 2. 점검 결과", "점검 결과", "7건", f"{len(s['findings'])}건"))
+        ov = s["overview"]["totals"]
+        kinds = {}
+        for f in s["findings"]:
+            kinds[f["type"]] = kinds.get(f["type"], 0) + (f.get("amount") or 0)
+        got.append(("첫 화면 카드·도표", "찾은 금액(추정)·점검 건수", "4,492만원 · 7건", f"{won(ov['amount'])}원 · {ov['findings']}건"))
+        got.append(("1. 한눈에 보기 · 도표", "유형별 찾은 금액(가스 초과·계약전력·전기 초과·휴관)", "1,291만 · 1,198만 · 994만 · 917만",
+                    " · ".join(won(kinds.get(k, 0)) for k in ("gas_excess", "contract", "excess", "closure"))))
+        got.append(("1. 한눈에 보기 · 도표", "시설별 전기 사용 비중 합계·종합체육센터", "4,356MWh · 40.7%",
+                    f"{round(ov['kwh'] / 1000):,}MWh · {next(x['kwh'] for x in s['overview']['facilities'] if x['name'] == '종합체육센터') / ov['kwh'] * 100:.1f}%"))
         f1 = s["findings"][0]
         got.append(("2. 점검 결과", "첫 점검 결과 금액(종합체육센터 가스 1월)", "12,907,650원", f"{f1['amount']:,}원"))
         e = next(x for x in s["effects"] if "LED" in x["title"])
