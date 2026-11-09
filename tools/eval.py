@@ -204,6 +204,14 @@ def eval_bills(n=40):
     fields = ["contract", "applied", "peak", "off", "mid", "on", "kwh", "pf", "basic", "energy", "pfc", "vat", "total", "ym", "fac"]
     ok_bills = ok_fields = 0
     fails = []
+    # 고지서 PDF는 reportlab으로 만든다(개발용). 없으면 저장해 둔 PDF 추출 글자(tools/eval_bills_text.json)로 같은 시험을 한다.
+    cache_file = ROOT / "tools" / "eval_bills_text.json"
+    try:
+        import reportlab  # noqa: F401
+        have_rl = True
+    except ImportError:
+        have_rl = False
+    cache = {} if have_rl else json.loads(cache_file.read_text(encoding="utf-8"))
     for i in range(n):
         f = dict(rnd.choice(S.FAC))
         y, m = rnd.choice(S.MONTHS)
@@ -219,8 +227,13 @@ def eval_bills(n=40):
         vat = round((basic + energy + pfc) * 0.1)
         r = {"fac": f, "ym": f"{y}-{m:02d}", "kwh": kwh, "bands": bands, "peak": peak, "applied": applied, "pf": pf,
              "basic": basic, "energy": energy, "pfc": pfc, "vat": vat, "total": basic + energy + pfc + vat}
-        pdf = S.bill_pdf(r)
-        lines = [ln for p in PdfReader(io.BytesIO(pdf)).pages for ln in (p.extract_text() or "").splitlines() if ln.strip()]
+        key = f"{i}:{r['fac']['name']}:{r['total']}"
+        if have_rl:
+            pdf = S.bill_pdf(r)
+            lines = [ln for p in PdfReader(io.BytesIO(pdf)).pages for ln in (p.extract_text() or "").splitlines() if ln.strip()]
+            cache[key] = lines
+        else:   # reportlab이 없는 PC: 같은 시드로 만든 고지서 PDF에서 미리 읽어 둔 글자를 쓴다
+            lines = cache[key]
         doc = Document(id=f"b{i}", name=f"b{i}.pdf", relpath=f"b{i}.pdf", ext=".pdf",
                        blocks=[Block(f"b{i}-{k}", f"b{i}", f"b{i}.pdf", f"p.1 {k + 1}줄", t) for k, t in enumerate(lines)])
         ds = ingest.Dataset()
@@ -243,8 +256,11 @@ def eval_bills(n=40):
             ok_bills += 1
         else:
             fails.append(f"고지서 {i + 1}: " + "; ".join(bad))
+    if have_rl:
+        cache_file.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
     return [{"name": "고지서 읽기(장 단위)", "passed": ok_bills, "total": n, "failures": fails,
-             "desc": f"값을 무작위로 바꾼 고지서 PDF {n}장에서 15개 항목을 모두 맞게 읽은 장 수(항목 단위 {ok_fields}/{n * len(fields)})"}]
+             "desc": f"값을 무작위로 바꾼 고지서 PDF {n}장에서 15개 항목을 모두 맞게 읽은 장 수(항목 단위 {ok_fields}/{n * len(fields)})"
+                     + ("" if have_rl else ". 이 PC에 reportlab이 없어 같은 시드로 만들어 둔 PDF의 추출 글자로 잼")}]
 
 
 # ------------------------------------------------------------ 3. 질문 이해
