@@ -77,6 +77,11 @@ def run_once():
                     f"{won(bt['current'])} · {bt['exec_pct']:g}% · {won(bt['expected'])} · {won(bt['remain'])}"))
         got.append(("4. 예산 관리", "부족·불용 예상 항목", "부족 1 · 불용 1", f"부족 {bt['short']} · 불용 {bt['unused']}"))
         pv = c.call("GET", "/api/report/preview")["blocks"]
+        iv = c.call("GET", "/api/invest")
+        rv = next(x for x in iv["reviews"] if x["fac"] == "본부 청사")
+        got.append(("투자 효과 · 놓치고 있는 것", "점검표에서 찾은 안 한·놓친 조치", "29건", f"{len(iv['gaps']['items'])}건"))
+        got.append(("투자 효과 · 사후 평가", "본부 청사 LED 1차 판정·회수 기간", "효과 미흡 · 116년", f"{rv['verdict']} · {rv['payback_y']:g}년"))
+        got.append(("투자 효과 · 사후 평가", "같은 시설 다음 LED 사업", "사후 확인 먼저 1건", f"사후 확인 먼저 {iv['counts'].get('사후 확인 먼저', 0)}건"))
         got.append(("보고서 미리보기", "보고서 제목", "에너지 사용 점검 보고서 (2025-10~2026-09)", next(b[1] for b in pv if b[0] == "title")))
         sc = json.loads((ROOT / "검증결과" / "scorecard.json").read_text(encoding="utf-8"))
         b = next(x for x in sc["areas"] if x["name"].startswith("고지서 읽기"))
