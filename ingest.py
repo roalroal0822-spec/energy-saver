@@ -147,7 +147,31 @@ class Dataset:
                 return n
         return raw
 
+    LIMITS = {"kwh": 50_000_000, "m3": 5_000_000, "total": 10_000_000_000}  # 한 시설 한 달 값으로 믿기 어려운 크기
+
     def put(self, table, key, rec):
+        """사용량·요금 한 달치를 넣는다. 아직 오지 않은 달, 음수, 믿기 어려운 크기는 넣지 않고 경고로 남긴다
+        (잘못된 한 줄이 '최근 12개월'과 전체 합계를 바꾸지 않게)."""
+        fac, ym = key
+        where = (rec.get("src") or {}).get("file") or ""
+        today = date.today().strftime("%Y-%m")
+        bad = None
+        if ym > today:
+            bad = f"아직 오지 않은 달({ym})"
+        elif ym < "2000-01":
+            bad = f"너무 이른 달({ym})"
+        else:
+            for k, lim in self.LIMITS.items():
+                v = rec.get(k)
+                if v is not None and v < 0:
+                    bad = f"{ {'kwh': '사용량', 'm3': '사용량', 'total': '요금'}[k]}이 음수({v:,.0f})"
+                    break
+                if v is not None and v > lim:
+                    bad = f"{ {'kwh': '사용량', 'm3': '사용량', 'total': '요금'}[k]}이 한 달 값으로 너무 큼({v:,.0f})"
+                    break
+        if bad:
+            self.warnings.append(f"{where}: {fac} {ym} 줄은 넣지 않았습니다(이유: {bad}). 원본을 확인해 주세요")
+            return
         old = table.get(key)
         if old:
             diff = [k for k in ("kwh", "m3", "total") if k in rec and k in old and old[k] != rec[k]]

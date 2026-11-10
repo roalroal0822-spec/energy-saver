@@ -636,7 +636,8 @@ function renderData() {
     dropZone("통합 자료를 여기에 끌어다 놓거나", f => up(f, "")),
     el("div", { class: "row", style: { marginTop: "12px" } },
       el("button", { onclick: async () => { await load(await api("POST", "/api/sample", { reset: true })); toast("모의자료(8월까지)로 되돌렸습니다"); } }, "모의자료 처음 상태로"),
-      el("button", { class: "danger", onclick: async () => { await load(await api("POST", "/api/reset")); } }, "자료 모두 비우기"))));
+      S.public ? el("span", { class: "small muted" }, "공개 시연판은 여러 사람이 같은 자료를 보므로 '자료 모두 비우기'를 쓰지 않습니다.")
+        : el("button", { class: "danger", onclick: async () => { await load(await api("POST", "/api/reset")); } }, "자료 모두 비우기"))));
   const facPanel = el("div", { class: "panel", id: "fac-data" }, el("span", { class: "spinner" }));
   box.append(facPanel);
   renderFacData(facPanel, up, bills);

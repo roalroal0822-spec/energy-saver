@@ -92,6 +92,10 @@ def facts_for(an, q):
                 facts.append(f"기온 보정 후 차이가 지침 기준({th:.0f}%) 안이라 이상 사용으로 보지 않음")
             # 규칙 답
             lines = [f"{fac}의 {int(ym[5:])}월 {'가스' if kind == 'gas' else '전기'} 사용량은 {_fmt(r['actual'], unit)}입니다."]
+            bill = (an.ds.gas if kind == "gas" else an.ds.elec).get((fac, ym)) or {}
+            if bill.get("total") and re.search(r"요금|얼마|비용|원\b|청구", q):  # 요금을 물으면 요금부터
+                facts.insert(0, f"{fac} {ym} {'가스' if kind == 'gas' else '전기'} 요금 {_fmt(bill['total'], '원')}")
+                lines[0] = f"{fac}의 {int(ym[5:])}월 {'가스' if kind == 'gas' else '전기'} 요금은 {_fmt(bill['total'], '원')}이고, 사용량은 {_fmt(r['actual'], unit)}입니다."
             if prev:
                 lines.append(f"전년 같은 달({_fmt(prev['actual'], unit)})보다 {ch:+.1f}% {'늘었' if ch > 0 else '줄었'}습니다.")
             if closed:

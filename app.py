@@ -167,6 +167,14 @@ def rebuild():
     return an
 
 
+def an_data():
+    """보고서·요약·엑셀처럼 자료가 있어야 하는 기능: 자료가 비어 있으면 오류 대신 안내."""
+    a = an()
+    if not a.ds.elec and not a.ds.gas:
+        raise HttpError(400, "분석할 전기·가스 자료가 없습니다. '자료 넣기'에서 시연용 모의자료를 불러오거나 자료를 올려 주세요")
+    return a
+
+
 def an():
     if STATE["an"] is None:
         if not any(SRC.rglob("*")) if SRC.exists() else True:
@@ -182,7 +190,7 @@ def get_state(req):
     a = an()
     cur = budget.Budget(a, cfg).current()
     return {"overview": a.overview(), "findings": a.findings, "effects": a.effects(), "months": a.months, "recent": a.recent,
-            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled, "kma": STATE.get("kma"),
+            "data": a.ds.summary(), "bills": STATE["bills"], "llm": llm.enabled, "public": cfg.public, "kma": STATE.get("kma"),
             "budget": {"fy": cur["fy"], "totals": cur.get("totals"), "items": [{k: i[k] for k in ("fac", "item", "state", "remain", "run_out")} for i in cur["items"]]} if cur else None}
 
 
@@ -333,6 +341,8 @@ def coverage(req):
 
 @app.post("/api/reset")
 def reset(req):
+    if cfg.public:
+        raise HttpError(403, "공개 시연판은 여러 사람이 같은 자료를 보므로 자료를 비울 수 없습니다. '시연용 모의자료 불러오기'로 처음 상태로 돌릴 수 있습니다")
     store.remove_tree("source")
     SRC.mkdir(parents=True, exist_ok=True)
     log("자료 비우기")
@@ -384,7 +394,7 @@ def rule_summary(a):
 
 @app.post("/api/summary")
 def summary(req):
-    a = an()
+    a = an_data()
     text = rule_summary(a)
     facts = [text] + [f"{f['title']}: {f['summary']}" for f in a.findings]
     res = qa.guard(llm, "공공기관 에너지 관리 보고서의 '총평'을 한국어 4~6문장으로 쓰세요. 우선순위와 다음 할 일을 말하세요.", facts, text)
@@ -620,7 +630,7 @@ def report_polish(req):
 @app.post("/api/report/conclusion")
 def report_conclusion(req):
     """보고서 끝의 '결론 및 건의'. 점검 결과·추천·예산·목표에서 계산된 사실만 쓴다."""
-    a = an()
+    a = an_data()
     ov = a.overview()
     facts = [rule_summary(a)]
     facts += [f"점검 결과 {f['id']} {f['title']}" + (f" ({f['amount_label']} {f['amount']:,}원)" if f.get("amount") else "") for f in a.findings[:8]]
@@ -723,12 +733,12 @@ def _clean_blocks(raw):
 @app.get("/api/report/preview")
 def report_preview(req):
     """화면 미리보기·수정용 보고서 블록(내려받기와 같은 내용)."""
-    return {"blocks": [list(b) for b in report_blocks(an())]}
+    return {"blocks": [list(b) for b in report_blocks(an_data())]}
 
 
 @app.post("/api/report")
 def report(req):
-    a = an()
+    a = an_data()
     ov = a.overview()
     b = req.json or {}
     blocks = _clean_blocks(b["blocks"]) if b.get("blocks") else report_blocks(a)
@@ -884,7 +894,7 @@ def budget_template(req):
 
 @app.post("/api/budget/report")
 def budget_report(req):
-    a = an()
+    a = an_data()
     b = budget.Budget(a, cfg, _bopts({**req.query, **(req.json or {})})).run()
     cur, nm, ny = b["current"], b["next_month"], b["next_year"]
     blocks = [("title", f"{cur['fy']}년 공공요금 예산 집행 관리 및 {ny['fy']}년도 편성 근거(안)"),
@@ -1091,7 +1101,7 @@ def invest_report(req):
 @app.post("/api/export-xlsx")
 def export_xlsx(req):
     """점검 결과·시설별 월 내역·조치 효과를 엑셀 한 파일로."""
-    a = an()
+    a = an_data()
     ov = a.overview()
     lv = {"bad": "조치 필요", "warn": "검토", "gray": "설정 확인"}
     sheets = [("점검 결과", ["번호", "구분", "시설", "내용", "요약", "금액(원, 추정)", "계산식", "담당", "근거 조문", "근거 자료"],

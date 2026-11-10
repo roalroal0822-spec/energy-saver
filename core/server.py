@@ -39,7 +39,13 @@ class Request:
     def json(self):
         if not self.body:
             return {}
-        return json.loads(self.body.decode("utf-8"))
+        try:
+            v = json.loads(self.body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            raise HttpError(400, "요청 형식(JSON)이 올바르지 않습니다")
+        if not isinstance(v, dict):
+            raise HttpError(400, "요청 형식이 맞지 않습니다(이름과 값의 묶음이어야 합니다)")
+        return v
 
 
 class Response:
@@ -135,8 +141,10 @@ class App:
         for method, rx, fn in self.routes:
             m = rx.match(path)
             if m and method == handler.command:
+                req = None
                 try:
-                    res = fn(Request(handler, {k: urllib.parse.unquote(v) for k, v in m.groupdict().items()}))
+                    req = Request(handler, {k: urllib.parse.unquote(v) for k, v in m.groupdict().items()})
+                    res = fn(req)
                     if not isinstance(res, Response):
                         res = json_response(res)
                     return res
@@ -144,6 +152,11 @@ class App:
                     return json_response({"error": e.message}, e.status)
                 except json.JSONDecodeError:
                     return json_response({"error": "요청 내용을 읽을 수 없습니다(JSON 형식 오류)"}, 400)
+                except (TypeError, AttributeError) as e:
+                    traceback.print_exc()
+                    if req is not None and req._body:  # 글자 자리에 숫자·목록을 보내는 등 값의 형식이 다른 요청
+                        return json_response({"error": "입력 값의 형식(글자·숫자·목록)이 맞지 않습니다"}, 400)
+                    return json_response({"error": "처리 중 오류가 발생했습니다. 입력 내용을 확인하거나 실행 창의 기록을 확인하세요."}, 500)
                 except Exception:
                     # 내부 오류 내용은 실행 창(서버 기록)에만 남기고 화면에는 일반 안내만 보낸다
                     traceback.print_exc()

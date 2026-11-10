@@ -412,3 +412,12 @@ body:not(.admin) .admin-only { display: none !important; }
 #tab-invest .viz-c svg text { font-size: 12px; fill: #7a6c5d; }
 #tab-invest svg path, #tab-invest svg line, #tab-invest svg circle { vector-effect: non-scaling-stroke; }
 .chk-m th { white-space: normal; min-width: 70px; font-size: 12px; } .chk-m td { text-align: center; } .chk-m td:first-child { text-align: left; white-space: nowrap; }
+
+/* 휴대전화: 숫자 칸·표가 화면 밖으로 밀리지 않게(표는 칸 안에서 옆으로 밀어 봄) */
+@media (max-width: 640px) {
+  .kpis { grid-template-columns: 1fr 1fr !important; gap: 10px; }
+  .kpis .stat { min-width: 0; padding: 14px 14px; }
+  .kpis .stat b { font-size: 22px; overflow-wrap: anywhere; }
+  .panel table.t { display: block; max-width: 100%; overflow-x: auto; }
+  .row .tag { white-space: normal; max-width: 100%; }
+}
